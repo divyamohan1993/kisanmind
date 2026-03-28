@@ -637,6 +637,51 @@ Every advisory generates a log entry:
 }
 ```
 
+### Edge Cases & Error Handling
+
+Problem 5 explicitly evaluates "edge-case handling." KisanMind handles every failure gracefully:
+
+| Failure | Detection | Fallback |
+|---------|-----------|----------|
+| **Cloudy satellite imagery** (no usable Sentinel-2 in last 30 days) | Earth Engine returns null/low-quality composite | Use last available clear image + warn farmer: "Satellite data is 3 weeks old due to cloud cover. Next clear image expected in 2-3 days." |
+| **AgMarkNet API down** | HTTP timeout / error response | Serve last-cached prices from BigQuery (refreshed daily via Cloud Scheduler) with timestamp: "Prices as of yesterday — live data temporarily unavailable." |
+| **OpenWeatherMap API failure** | HTTP error | Fall back to Google Maps weather data (available via Maps Platform) or serve IMD district-level forecast from cached data |
+| **Speech-to-Text can't understand accent/dialect** | Low confidence score (<0.6) from STT | Ask farmer to repeat, offer DTMF fallback ("Press 1 for tomato, 2 for wheat..."), or switch to SMS mode |
+| **Location not recognized** | Geocoding returns no results | Ask progressively: "Which district?" → "Which state?" → use district centroid for satellite analysis |
+| **Crop not in our database** | Crop name not matched | Respond honestly: "I don't have specific data for [crop]. I can still show you weather and nearby mandi prices. For crop-specific advice, contact your local KVK." |
+| **Earth Engine quota exceeded** | 429/quota error from EE API | Serve pre-computed daily NDVI snapshots for major districts from Cloud Storage cache |
+
+**Design principle**: Every agent returns a result, even if degraded. The orchestrator merges whatever data is available and clearly communicates what's missing. A partial answer ("I have mandi prices and weather, but satellite data is unavailable today") is always better than no answer.
+
+### First-Time Onboarding Flow
+
+When a farmer calls for the first time, VaaniSetu runs a 60-second onboarding:
+
+```
+VaaniSetu: "Namaste! KisanMind mein aapka swagat hai.
+            Pehli baar aa rahe hain — kuch sawal puchna chahenge
+            taaki aapko sahi salah de sakein."
+
+Step 1:    "Aapka gaon ya sheher kya hai?"
+Farmer:    "Solan"
+           → Geocoded → lat/lon stored in Firestore
+
+Step 2:    "Kaunsi fasal uga rahe hain abhi?"
+Farmer:    "Tamatar"
+           → Crop registered, growth calendar auto-set
+
+Step 3:    "Kitne area mein? Bigha ya hectare mein batayein"
+Farmer:    "Do bigha"
+           → Stored for yield estimation and mandi quantity calc
+
+VaaniSetu: "Shukriya! Ab se jab bhi call karenge,
+            aapki fasal aur jagah yaad rahegi.
+            Chaliye, aaj ki salah dete hain..."
+           → Routes to full advisory flow
+```
+
+Returning callers are identified by phone number (Firestore lookup) and skip onboarding entirely.
+
 ---
 
 ## 6. Low-Connectivity Design — Graceful Degradation
@@ -916,6 +961,21 @@ Quick flashes:
 - Mandi price arbitrage of ₹200-500/quintal is consistently available within 100km
 - Weather-triggered harvest timing prevents 5-15% post-harvest losses
 - Voice-first approach reaches farmers without smartphones (estimated 40% of farming households)
+
+### Show the Math — One Farmer's Story
+
+A tomato farmer near Solan, HP, grows on 2 bigha (~0.5 acre) and produces ~30 quintals per harvest, 2 harvests per year.
+
+**Without KisanMind**: Sells at nearest Solan mandi at ₹1,800/qtl. Revenue = 30 × ₹1,800 = **₹54,000 per harvest**.
+
+**With KisanMind**:
+- MandiMitra finds Shimla mandi at ₹2,400/qtl, 62km away
+- Transport cost: ₹200/qtl × 30 qtl = ₹6,000
+- Commission difference: negligible (both ~4%)
+- Net at Shimla: (₹2,400 × 30) − ₹6,000 = **₹66,000 per harvest**
+- MausamGuru prevented 1 harvest of rain damage per year by timing the pick correctly, saving ~₹10,000 in spoilage
+
+**Annual gain**: (₹12,000 × 2 harvests) + ₹10,000 saved = **₹34,000/year** — an increase of roughly 30% on a ₹1,08,000 baseline. That's 2 months of a rural family's expenses.
 
 ### ET Revenue Alignment
 - KisanMind extends ET's reach to rural India — 150M new potential users
