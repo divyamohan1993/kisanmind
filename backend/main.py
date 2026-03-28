@@ -47,6 +47,35 @@ if not GEMINI_API_KEY:
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("kisanmind")
 
+# ---------------------------------------------------------------------------
+# In-memory response caches (dict with timestamps, no external deps)
+# ---------------------------------------------------------------------------
+import time as _time
+
+# Advisory cache: key = "lat:lon:crop:lang", value = (timestamp, response_dict)
+_advisory_cache: dict[str, tuple[float, dict]] = {}
+_ADVISORY_CACHE_TTL = 30 * 60  # 30 minutes
+
+# NDVI cache: key = "lat:lon", value = (timestamp, response_dict)
+_ndvi_cache: dict[str, tuple[float, dict]] = {}
+_NDVI_CACHE_TTL = 6 * 60 * 60  # 6 hours
+
+
+def _cache_get(cache: dict, key: str, ttl: float):
+    """Return cached value if exists and fresh, else None."""
+    entry = cache.get(key)
+    if entry is None:
+        return None
+    ts, value = entry
+    if (_time.time() - ts) > ttl:
+        del cache[key]
+        return None
+    return value
+
+
+def _cache_set(cache: dict, key: str, value):
+    cache[key] = (_time.time(), value)
+
 # Gemini client
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -660,9 +689,20 @@ async def get_ndvi(req: NDVIRequest):
     if not EE_INITIALIZED:
         raise HTTPException(503, "Earth Engine is not initialized. Satellite data unavailable.")
     log.info(f"NDVI request: lat={req.latitude}, lon={req.longitude}")
+
+    # --- Cache lookup (round coords to ~1 km precision) ---
+    cache_key = f"{round(req.latitude, 2)}:{round(req.longitude, 2)}"
+    cached = _cache_get(_ndvi_cache, cache_key, _NDVI_CACHE_TTL)
+    if cached is not None:
+        log.info(f"CACHE HIT  ndvi  key={cache_key}")
+        return {**cached, "cached": True}
+    log.info(f"CACHE MISS ndvi  key={cache_key}")
+
     result = await fetch_ndvi(req.latitude, req.longitude)
     if result is None:
         raise HTTPException(404, "No satellite data available for this location. Try a different area or check back later.")
+    _cache_set(_ndvi_cache, cache_key, result)
+    result["cached"] = False
     return result
 
 
@@ -671,8 +711,19 @@ async def advisory(req: AdvisoryRequest):
     """Main advisory endpoint — all data from real APIs, zero fake data."""
     log.info(f"Advisory request: crop={req.crop}, lat={req.latitude}, lon={req.longitude}, lang={req.language}")
 
+    # --- Cache lookup (round coords to ~1 km precision) ---
+    cache_key = f"{round(req.latitude, 2)}:{round(req.longitude, 2)}:{req.crop}:{req.language}"
+    cached = _cache_get(_advisory_cache, cache_key, _ADVISORY_CACHE_TTL)
+    if cached is not None:
+        log.info(f"CACHE HIT  advisory  key={cache_key}")
+        return {**cached, "cached": True}
+    log.info(f"CACHE MISS advisory  key={cache_key}")
+
     try:
-        return await _run_advisory(req)
+        result = await _run_advisory(req)
+        _cache_set(_advisory_cache, cache_key, result)
+        result["cached"] = False
+        return result
     except HTTPException:
         raise
     except Exception as e:

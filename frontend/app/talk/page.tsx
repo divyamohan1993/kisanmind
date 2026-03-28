@@ -99,6 +99,7 @@ export default function TalkPage() {
   const [summary, setSummary] = useState<CallSummary | null>(null);
   const [showLangPicker, setShowLangPicker] = useState(false);
   const [statusText, setStatusText] = useState("");
+  const [countdown, setCountdown] = useState<number | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -152,19 +153,37 @@ export default function TalkPage() {
   const silenceCountRef = useRef(0);
 
   /* ---- Listen for farmer's speech ---- */
+  const RECORDING_LABELS: Record<string, string> = {
+    hi: "रिकॉर्डिंग", en: "Recording", ta: "பதிவு செய்கிறது", te: "రికార్డింగ్",
+    bn: "রেকর্ডিং", mr: "रेकॉर्डिंग", gu: "રેકોર્ડિંગ", kn: "ರೆಕಾರ್ಡಿಂಗ್",
+    ml: "റെക്കോർഡിംഗ്", pa: "ਰਿਕਾਰਡਿੰਗ",
+  };
+
+  const RECORDING_DURATION = 5; // seconds
+
   const listenOnce = useCallback(async (): Promise<string> => {
     if (!callActiveRef.current) return "";
     setCallState("listening");
-    setStatusText(language === "en" ? "Listening..." : "सुन रहे हैं...");
+    const recordingLabel = RECORDING_LABELS[language] || RECORDING_LABELS["hi"];
+    setStatusText(`${recordingLabel}...`);
+    setCountdown(RECORDING_DURATION);
     await startMic();
-    await new Promise((r) => setTimeout(r, 7000));
+
+    // Countdown from RECORDING_DURATION to 0
+    for (let sec = RECORDING_DURATION; sec >= 1; sec--) {
+      if (!callActiveRef.current) { releaseMic(); setCountdown(null); return ""; }
+      setCountdown(sec);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    setCountdown(null);
+
     if (!callActiveRef.current) { releaseMic(); return ""; }
     const blob = await stopMic();
     releaseMic();
     if (blob.size === 0) return "";
 
     setCallState("processing");
-    setStatusText(language === "en" ? "Understanding..." : "समझ रहे हैं...");
+    setStatusText(language === "en" ? "Processing..." : "प्रोसेसिंग...");
     try {
       const fd = new FormData();
       fd.append("audio", blob, "recording.webm");
@@ -331,6 +350,7 @@ export default function TalkPage() {
     // Stop mic
     mediaRecorderRef.current?.stop();
     releaseMic();
+    setCountdown(null);
     setCallState("ended");
     setStatusText(language === "en" ? "Call ended" : "कॉल समाप्त");
   }, [language, releaseMic]);
@@ -536,16 +556,23 @@ export default function TalkPage() {
         ) : callState === "ended" ? null : (
           /* IN CALL — red end call button + status */
           <>
-            {/* Listening indicator */}
+            {/* Listening indicator with countdown */}
             {callState === "listening" && (
-              <div className="mb-3 flex items-center gap-1">
-                {[...Array(5)].map((_, i) => (
-                  <div key={i} className="w-1 bg-healthy rounded-full animate-pulse" style={{
-                    height: `${12 + Math.random() * 20}px`,
-                    animationDelay: `${i * 100}ms`,
-                    animationDuration: "0.5s",
-                  }} />
-                ))}
+              <div className="mb-3 flex flex-col items-center gap-2">
+                {countdown !== null && (
+                  <div className="text-6xl font-black text-healthy tabular-nums animate-pulse">
+                    {countdown}
+                  </div>
+                )}
+                <div className="flex items-center gap-1">
+                  {[...Array(5)].map((_, i) => (
+                    <div key={i} className="w-1 bg-healthy rounded-full animate-pulse" style={{
+                      height: `${12 + Math.random() * 20}px`,
+                      animationDelay: `${i * 100}ms`,
+                      animationDuration: "0.5s",
+                    }} />
+                  ))}
+                </div>
               </div>
             )}
 
