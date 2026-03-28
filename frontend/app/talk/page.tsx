@@ -152,36 +152,102 @@ export default function TalkPage() {
 
   const silenceCountRef = useRef(0);
 
-  /* ---- Listen for farmer's speech ---- */
-  const RECORDING_LABELS: Record<string, string> = {
-    hi: "रिकॉर्डिंग", en: "Recording", ta: "பதிவு செய்கிறது", te: "రికార్డింగ్",
-    bn: "রেকর্ডিং", mr: "रेकॉर्डिंग", gu: "રેકોર્ડિંગ", kn: "ರೆಕಾರ್ಡಿಂಗ್",
-    ml: "റെക്കോർഡിംഗ്", pa: "ਰਿਕਾਰਡਿੰਗ",
-  };
+  /* ---- Smart voice-activity-aware recording ---- */
+  // Records continuously. When farmer pauses, starts a silence countdown.
+  // If farmer speaks again, resets countdown. Only stops after sustained silence.
 
-  const RECORDING_DURATION = 5; // seconds
+  const SILENCE_TIMEOUT = 4; // seconds of silence before processing
+  const MAX_RECORDING = 30;  // hard max recording time
 
   const listenOnce = useCallback(async (): Promise<string> => {
     if (!callActiveRef.current) return "";
     setCallState("listening");
-    const recordingLabel = RECORDING_LABELS[language] || RECORDING_LABELS["hi"];
-    setStatusText(`${recordingLabel}...`);
-    setCountdown(RECORDING_DURATION);
-    await startMic();
-
-    // Countdown from RECORDING_DURATION to 0
-    for (let sec = RECORDING_DURATION; sec >= 1; sec--) {
-      if (!callActiveRef.current) { releaseMic(); setCountdown(null); return ""; }
-      setCountdown(sec);
-      await new Promise((r) => setTimeout(r, 1000));
-    }
+    setStatusText(language === "en" ? "Speak..." : "बोलिए...");
     setCountdown(null);
 
-    if (!callActiveRef.current) { releaseMic(); return ""; }
+    await startMic();
+
+    // Set up audio level monitoring via AnalyserNode
+    const stream = streamRef.current;
+    let isSpeaking = false;
+    let silenceStart = 0;
+    let hasSpokeAtAll = false;
+    let analyser: AnalyserNode | null = null;
+
+    if (stream) {
+      try {
+        const audioCtx = new AudioContext();
+        const source = audioCtx.createMediaStreamSource(stream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.4;
+        source.connect(analyser);
+      } catch { /* analyser not available — fall back to fixed timer */ }
+    }
+
+    const getAudioLevel = (): number => {
+      if (!analyser) return 0;
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += data[i];
+      return sum / data.length;
+    };
+
+    // Poll audio level every 200ms
+    const result = await new Promise<"timeout" | "silence" | "cancelled">((resolve) => {
+      const startTime = Date.now();
+      const interval = setInterval(() => {
+        if (!callActiveRef.current) { clearInterval(interval); resolve("cancelled"); return; }
+
+        const elapsed = (Date.now() - startTime) / 1000;
+        if (elapsed >= MAX_RECORDING) { clearInterval(interval); resolve("timeout"); return; }
+
+        const level = getAudioLevel();
+        const speaking = level > 12; // threshold for speech vs silence
+
+        if (speaking) {
+          isSpeaking = true;
+          hasSpokeAtAll = true;
+          silenceStart = 0;
+          setCountdown(null);
+          setStatusText(language === "en" ? "Listening..." : "सुन रहे हैं...");
+        } else if (isSpeaking && !speaking) {
+          // Just went silent after speaking
+          isSpeaking = false;
+          silenceStart = Date.now();
+        }
+
+        // If farmer spoke and then went silent, start countdown
+        if (hasSpokeAtAll && !isSpeaking && silenceStart > 0) {
+          const silenceSec = (Date.now() - silenceStart) / 1000;
+          const remaining = Math.ceil(SILENCE_TIMEOUT - silenceSec);
+          if (remaining > 0) {
+            setCountdown(remaining);
+            setStatusText(language === "en" ? "Continue or wait..." : "बोलें या रुकें...");
+          } else {
+            clearInterval(interval);
+            resolve("silence");
+          }
+        }
+
+        // If no speech at all after 8 seconds, give up
+        if (!hasSpokeAtAll && elapsed > 8) {
+          clearInterval(interval);
+          resolve("timeout");
+        }
+      }, 200);
+    });
+
+    setCountdown(null);
+
+    if (result === "cancelled") { releaseMic(); return ""; }
+
     const blob = await stopMic();
     releaseMic();
-    if (blob.size === 0) return "";
+    if (blob.size === 0 || !hasSpokeAtAll) return "";
 
+    // STT
     setCallState("processing");
     setStatusText(language === "en" ? "Processing..." : "प्रोसेसिंग...");
     try {
