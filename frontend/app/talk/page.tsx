@@ -149,60 +149,87 @@ export default function TalkPage() {
     streamRef.current = null;
   }, []);
 
-  /* ---- The core conversation loop ---- */
-  const processOneTurn = useCallback(async (): Promise<void> => {
-    if (!callActiveRef.current) return;
+  const silenceCountRef = useRef(0);
 
-    // LISTEN phase
+  /* ---- Listen for farmer's speech ---- */
+  const listenOnce = useCallback(async (): Promise<string> => {
+    if (!callActiveRef.current) return "";
     setCallState("listening");
     setStatusText(language === "en" ? "Listening..." : "सुन रहे हैं...");
     await startMic();
-
-    // Wait for silence or 8 seconds max
-    await new Promise((resolve) => setTimeout(resolve, 6000));
-
-    if (!callActiveRef.current) { releaseMic(); return; }
-
-    const audioBlob = await stopMic();
+    await new Promise((r) => setTimeout(r, 7000));
+    if (!callActiveRef.current) { releaseMic(); return ""; }
+    const blob = await stopMic();
     releaseMic();
+    if (blob.size === 0) return "";
 
-    if (audioBlob.size === 0 || !callActiveRef.current) return;
-
-    // PROCESS phase
     setCallState("processing");
     setStatusText(language === "en" ? "Understanding..." : "समझ रहे हैं...");
-
-    // 1. STT
-    let transcript = "";
     try {
-      const formData = new FormData();
-      formData.append("audio", audioBlob, "recording.webm");
-      formData.append("language", language);
-      const sttRes = await fetch(`${API_BASE}/api/stt`, { method: "POST", body: formData });
-      const sttData = await sttRes.json();
-      transcript = sttData.transcript || "";
-    } catch { /* empty */ }
+      const fd = new FormData();
+      fd.append("audio", blob, "recording.webm");
+      fd.append("language", language);
+      const res = await fetch(`${API_BASE}/api/stt`, { method: "POST", body: fd });
+      const d = await res.json();
+      return d.transcript || "";
+    } catch { return ""; }
+  }, [language, startMic, stopMic, releaseMic]);
+
+  /* ---- The full call flow ---- */
+  const processOneTurn = useCallback(async (): Promise<void> => {
+    if (!callActiveRef.current) return;
+
+    // Listen for farmer's crop
+    const transcript = await listenOnce();
 
     if (!transcript.trim()) {
-      // Didn't hear anything — prompt again
-      if (callActiveRef.current) {
-        const promptText = language === "en" ? "I didn't catch that. Please say again — which crop and where?" : "मुझे सुनाई नहीं दिया। फिर से बताइए — कौनसी फसल और कहाँ?";
+      silenceCountRef.current++;
+      if (silenceCountRef.current >= 2) {
+        // End call after 2 silences
+        const byeText = language === "en"
+          ? "I could not hear you. Please call again when you are ready. Goodbye!"
+          : "आपकी आवाज़ नहीं आ रही। जब चाहें दोबारा कॉल करें। नमस्ते!";
         setCallState("speaking");
-        addMessage("kisanmind", promptText);
-        const audio = await playTTS(promptText, language);
-        await waitForAudioEnd(audio);
-        // Loop back to listen
-        if (callActiveRef.current) await processOneTurn();
+        addMessage("kisanmind", byeText);
+        const byeAudio = await playTTS(byeText, language);
+        await waitForAudioEnd(byeAudio);
+        callActiveRef.current = false;
+        setCallState("ended");
+        return;
       }
+      // One retry
+      const retryText = language === "en"
+        ? "I didn't catch that. Please tell me which crop you are growing."
+        : "सुनाई नहीं दिया। बताइए आप कौनसी फसल उगा रहे हैं?";
+      setCallState("speaking");
+      addMessage("kisanmind", retryText);
+      const retryAudio = await playTTS(retryText, language);
+      await waitForAudioEnd(retryAudio);
+      if (callActiveRef.current) await processOneTurn();
       return;
     }
 
+    silenceCountRef.current = 0;
     addMessage("farmer", transcript);
 
-    // 2. Start advisory fetch AND play engagement facts simultaneously
-    setStatusText(language === "en" ? "Getting real data..." : "असली डेटा ला रहे हैं...");
+    // Engagement fact WHILE fetching
+    const FACTS: Record<string, string[]> = {
+      hi: [
+        "बहुत अच्छा! मैं अभी आपके इलाके की मंडी भाव, मौसम और सैटेलाइट से फसल की सेहत देख रहा हूँ। बस कुछ सेकंड लगेंगे।",
+        "ठीक है! आपके लिए असली डेटा जोड़ रहा हूँ। सही मंडी चुनने से हर क्विंटल पर 200 से 500 रुपये ज्यादा मिल सकते हैं। यही मैं ढूंढ रहा हूँ।",
+      ],
+      en: [
+        "Great! I'm now checking real mandi prices, weather, and satellite crop health for your area. Just a few seconds.",
+        "Got it! Pulling real data for you. Choosing the right mandi can earn ₹200-500 extra per quintal.",
+      ],
+    };
+    const facts = FACTS[language] || FACTS["hi"];
+    const engagementText = facts[Math.floor(Math.random() * facts.length)];
 
-    // Start advisory fetch (runs in background)
+    setCallState("speaking");
+    addMessage("kisanmind", engagementText);
+
+    // Start advisory + engagement audio in parallel
     const advisoryPromise = fetch(`${API_BASE}/api/advisory`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -210,109 +237,62 @@ export default function TalkPage() {
         latitude: geo.latitude, longitude: geo.longitude,
         crop: "auto", language, intent: transcript,
       }),
-    }).then(r => r.json());
+    }).then(r => r.json()).catch(() => null);
 
-    // While advisory loads, play engaging farming facts to keep farmer on the call
-    const FACTS: Record<string, string[]> = {
-      hi: [
-        "अच्छा सवाल! मैं अभी आपके लिए असली मंडी भाव, मौसम और सैटेलाइट डेटा जोड़ रहा हूँ... क्या आप जानते हैं कि भारत में 150 करोड़ से ज्यादा खेत के टुकड़े हैं?",
-        "बस कुछ सेकंड... वैसे एक बात बताता हूँ — अगर किसान सही मंडी में बेचें तो हर क्विंटल पर 200 से 500 रुपये ज्यादा मिल सकते हैं। यही मैं अभी आपके लिए खोज रहा हूँ।",
-        "थोड़ा इंतज़ार करें... आप जानते हैं, मौसम की सही जानकारी से फसल खराब होने का खतरा 30 प्रतिशत तक कम हो जाता है? आपके इलाके का मौसम भी देख रहा हूँ।",
-      ],
-      en: [
-        "Great question! I'm pulling real mandi prices, weather data, and satellite imagery for you right now... Did you know India has over 1.5 billion farm parcels?",
-        "Just a moment... Fun fact — selling at the right mandi can earn you ₹200-500 more per quintal. That's exactly what I'm finding for you right now.",
-        "Almost there... Did you know accurate weather information reduces crop loss risk by 30%? I'm checking your local forecast too.",
-      ],
-      ta: [
-        "நல்ல கேள்வி! நான் இப்போது உங்களுக்கான உண்மையான மண்டி விலைகள், வானிலை தரவுகளை பெறுகிறேன்... இந்தியாவில் 150 கோடிக்கும் அதிகமான விவசாய நிலங்கள் உள்ளன என்பது தெரியுமா?",
-      ],
-      te: [
-        "మంచి ప్రశ్న! నేను ఇప్పుడు మీ కోసం నిజమైన మండి ధరలు, వాతావరణ డేటాను తీసుకొస్తున్నాను... భారతదేశంలో 150 కోట్లకు పైగా వ్యవసాయ భూములు ఉన్నాయని మీకు తెలుసా?",
-      ],
-      bn: [
-        "দারুণ প্রশ্ন! আমি এখন আপনার জন্য আসল মান্ডি দাম, আবহাওয়া ডেটা আনছি... আপনি কি জানেন ভারতে 150 কোটিরও বেশি কৃষি জমি আছে?",
-      ],
-    };
-
-    const facts = FACTS[language] || FACTS["hi"];
-    const factIndex = Math.floor(Math.random() * facts.length);
-    const engagementText = facts[factIndex];
-
-    // Play engagement fact while advisory loads
-    setCallState("speaking");
-    addMessage("kisanmind", engagementText);
     const engagementAudio = await playTTS(engagementText, language);
-
-    // Wait for BOTH: engagement audio to finish AND advisory to come back
     const [advisoryResult] = await Promise.all([
-      advisoryPromise.catch(() => null),
+      advisoryPromise,
       waitForAudioEnd(engagementAudio),
     ]);
 
     if (!callActiveRef.current) return;
 
-    // Process advisory result
+    // Process advisory
     let advisoryText = "";
-    try {
-      const data = advisoryResult;
-      if (data && !data.detail) {
-        advisoryText = data.advisory || data.combined_advisory || "Advisory received.";
-        const bm = data.best_mandi || {};
-        const lm = data.local_mandi || {};
-        const loc = data.location || {};
-        setSummary({
-          location: loc.location_name ? `${loc.location_name}, ${loc.state}` : undefined,
-          crop: data.crop,
-          bestMandi: bm.market,
-          bestPrice: bm.modal_price,
-          localMandi: lm.market,
-          localPrice: lm.modal_price,
-          distanceKm: bm.distance_km,
-          weatherDays: data.weather?.daily_forecast,
-          advisory: advisoryText,
-        });
-      } else {
-        throw new Error(data?.detail || "No data");
-      }
-    } catch {
+    if (advisoryResult && !advisoryResult.detail && !advisoryResult.error) {
+      advisoryText = advisoryResult.advisory || "";
+      const bm = advisoryResult.best_mandi || {};
+      const lm = advisoryResult.local_mandi || {};
+      const loc = advisoryResult.location || {};
+      setSummary({
+        location: loc.location_name ? `${loc.location_name}, ${loc.state}` : undefined,
+        crop: advisoryResult.crop,
+        bestMandi: bm.market,
+        bestPrice: bm.modal_price,
+        localMandi: lm.market,
+        localPrice: lm.modal_price,
+        distanceKm: bm.distance_km,
+        weatherDays: advisoryResult.weather?.daily_forecast,
+        advisory: advisoryText,
+      });
+    } else {
       advisoryText = language === "en"
-        ? "Sorry, could not fetch advisory right now. Please try again."
-        : "माफ कीजिए, अभी सलाह नहीं मिल पाई। कृपया फिर से कोशिश करें।";
+        ? "Sorry, could not fetch advisory right now. Please try again later."
+        : "माफ कीजिए, अभी सलाह नहीं मिल पाई। थोड़ी देर बाद फिर कोशिश करें।";
     }
 
-    if (!callActiveRef.current) return;
-
-    // If advisory wasn't ready yet, wait for it
-    if (!advisoryText && advisoryResult === null) {
-      const waitText = language === "en" ? "Still loading..." : "बस आ रहा है...";
-      const waitAudio = await playTTS(waitText, language);
-      await waitForAudioEnd(waitAudio);
-    }
-
-    // NOW speak the real advisory
+    // Speak advisory
     setStatusText(language === "en" ? "Here's your advice..." : "आपकी सलाह तैयार है...");
     addMessage("kisanmind", advisoryText);
-
-    const audio = await playTTS(advisoryText, language);
-    currentAudioRef.current = audio;
-    await waitForAudioEnd(audio);
+    const advAudio = await playTTS(advisoryText, language);
+    currentAudioRef.current = advAudio;
+    await waitForAudioEnd(advAudio);
 
     if (!callActiveRef.current) return;
 
-    // Ask follow-up
-    const followUp = language === "en"
-      ? "Do you want to know anything else?"
-      : "क्या आप कुछ और जानना चाहते हैं?";
-    addMessage("kisanmind", followUp);
-    const followAudio = await playTTS(followUp, language);
-    await waitForAudioEnd(followAudio);
+    // End the call with goodbye
+    const goodbyeText = language === "en"
+      ? "That's my advice for today. Call again anytime you need help. Goodbye and good farming!"
+      : "आज के लिए मेरी सलाह यही है। जब भी ज़रूरत हो दोबारा कॉल करें। नमस्ते और अच्छी खेती करें!";
+    addMessage("kisanmind", goodbyeText);
+    const goodbyeAudio = await playTTS(goodbyeText, language);
+    await waitForAudioEnd(goodbyeAudio);
 
-    // Auto-loop back to listening
-    if (callActiveRef.current) {
-      await processOneTurn();
-    }
-  }, [language, geo.latitude, geo.longitude, startMic, stopMic, releaseMic]);
+    // End call, show summary
+    callActiveRef.current = false;
+    setCallState("ended");
+    setStatusText("");
+  }, [language, geo.latitude, geo.longitude, listenOnce]);
 
   const addMessage = (type: "farmer" | "kisanmind", text: string) => {
     setMessages((prev) => [...prev, { type, text, timestamp: new Date() }]);
@@ -321,6 +301,7 @@ export default function TalkPage() {
   /* ---- Start the call ---- */
   const startCall = useCallback(async () => {
     callActiveRef.current = true;
+    silenceCountRef.current = 0;
     setMessages([]);
     setSummary(null);
 

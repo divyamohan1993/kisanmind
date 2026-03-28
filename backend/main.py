@@ -454,29 +454,35 @@ async def generate_advisory_with_gemini(
     else:
         satellite_section = "Satellite crop health data: unavailable"
 
-    prompt = f"""You are KisanMind, a friendly agricultural advisor talking to an Indian farmer.
+    prompt = f"""You are KisanMind, a friendly agricultural advisor talking to an Indian farmer on a phone call.
 Speak in {language_name} language as if you're their trusted friend/elder.
-Use simple words. No English jargon. Use local units (quintal, bigha).
-Always mention specific numbers — prices, distances, temperatures.
 
-Here is the real data:
+STRICT RULES:
+- Use ONLY plain text. NO markdown. NO asterisks (*), NO bold, NO bullet points, NO numbered lists.
+- Use simple spoken language — this will be read aloud by text-to-speech.
+- Use local units (quintal, bigha, rupaye).
+- ONLY state facts from the data below. DO NOT invent or assume anything the farmer said.
+- DO NOT hallucinate farmer's statements. If the farmer didn't mention something, don't claim they did.
+- For any pesticide, fungicide, or chemical treatment: DO NOT recommend brands or dosages. Instead say "apne nazdeeki Krishi Vigyan Kendra (KVK) se sampark karein" and mention KVK helpline 1800-180-1551.
+- Keep it under 200 words. This is a phone conversation, not an essay.
+
+REAL DATA (use ONLY this):
 Location: {location_name}, {state}
 Crop: {crop}
-Today's mandi prices: {json.dumps(mandis[:10], ensure_ascii=False)}
-Best mandi: {best_mandi['market']} at ₹{best_mandi['modal_price']}/quintal ({best_mandi.get('distance_km', 'N/A')}km away, {best_mandi.get('duration_text', 'N/A')} travel)
-Local mandi: {local_mandi_name} at ₹{local_price}/quintal
-Price advantage: ₹{price_advantage}/quintal more at {best_mandi['market']}
-Weather next 5 days: {weather['summary']}
+Mandi prices today:
+  Best: {best_mandi['market']} — {best_mandi['modal_price']} rupaye per quintal, {best_mandi.get('distance_km', '?')} km door, {best_mandi.get('duration_text', '?')} ka raasta
+  Local: {local_mandi_name} — {local_price} rupaye per quintal
+  Fayda: {best_mandi['market']} mein {price_advantage} rupaye zyada milenge per quintal
+Weather: {weather['summary']}
 {satellite_section}
 
-Give the farmer a complete advisory covering:
-1. Where to sell (best mandi with price, distance, net profit)
-2. Weather actions (what to do, what NOT to do)
-3. Satellite crop health assessment (if data available — mention NDVI health status and any concern)
-4. Any warnings
+Cover:
+1. Where to sell — best mandi with price and distance
+2. Weather — what to do or avoid in next 2-3 days
+3. Crop health from satellite — explain in simple terms (dont say NDVI, say "satellite se fasal ki sehat dekhi")
+4. If any problem detected, refer to nearest KVK (helpline: 1800-180-1551)
 
-Keep it conversational — like talking to a friend on phone. Under 250 words.
-Add disclaimer: "Yeh data aaj ki AgMarkNet, satellite aur mausam report se hai. Final faisla aap ka hai."
+End with: "Yeh data aaj ki AgMarkNet, satellite aur mausam report se hai. Final faisla aap ka hai."
 """
 
     # Use Gemini 3.1 Pro for rich conversational advisory
@@ -484,7 +490,17 @@ Add disclaimer: "Yeh data aaj ki AgMarkNet, satellite aur mausam report se hai. 
         model="gemini-3.1-pro-preview",
         contents=prompt,
     )
-    return response.text
+    # Strip ALL markdown formatting — this text will be spoken aloud via TTS
+    import re
+    text = response.text
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)  # **bold** → bold
+    text = re.sub(r'\*(.+?)\*', r'\1', text)        # *italic* → italic
+    text = re.sub(r'#{1,6}\s*', '', text)            # ### heading → heading
+    text = re.sub(r'[-•]\s+', '', text)              # bullet points
+    text = re.sub(r'\d+\.\s+', '', text)             # numbered lists
+    text = re.sub(r'`(.+?)`', r'\1', text)           # `code` → code
+    text = re.sub(r'\n{3,}', '\n\n', text)           # collapse excess newlines
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------
