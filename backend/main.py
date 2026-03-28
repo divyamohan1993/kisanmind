@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from google import genai
@@ -654,6 +655,144 @@ Return ONLY valid JSON (no markdown, no explanation):
         raise HTTPException(502, f"Gemini intent extraction failed: {e}")
 
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# Twilio Voice Webhooks — Phone call integration
+# A farmer calls the Twilio number → Twilio hits these webhooks
+# ---------------------------------------------------------------------------
+TWILIO_WELCOME = {
+    "hi": "नमस्ते! किसानमाइंड में आपका स्वागत है। अपनी भाषा में बोलिए — आप कौनसी फसल उगा रहे हैं और कहाँ?",
+    "en": "Welcome to KisanMind! Tell me which crop you're growing and your location.",
+    "ta": "கிசான்மைண்டிற்கு வரவேற்கிறோம்! நீங்கள் எந்தப் பயிரை பயிரிடுகிறீர்கள், எங்கே?",
+    "te": "కిసాన్‌మైండ్‌కు స్వాగతం! మీరు ఏ పంట పండిస్తున్నారు, ఎక్కడ?",
+    "bn": "কিসানমাইন্ডে স্বাগতম! আপনি কোন ফসল চাষ করছেন এবং কোথায়?",
+}
+
+BASE_URL = os.getenv("BASE_URL", "https://kisanmind-api-409924770511.asia-south1.run.app")
+
+
+@app.post("/api/voice/incoming")
+async def twilio_incoming_call(request: Request):
+    """Twilio webhook: farmer calls the number. Greet and gather speech."""
+    form = await request.form()
+    caller = form.get("From", "unknown")
+    log.info(f"Incoming call from {caller}")
+
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Aditi" language="hi-IN">
+        {TWILIO_WELCOME["hi"]}
+    </Say>
+    <Gather input="speech" language="hi-IN" speechTimeout="3" timeout="10"
+            action="{BASE_URL}/api/voice/process" method="POST">
+        <Say voice="Polly.Aditi" language="hi-IN">
+            बोलिए, मैं सुन रही हूँ।
+        </Say>
+    </Gather>
+    <Say voice="Polly.Aditi" language="hi-IN">
+        कोई बात नहीं, फिर से कॉल करें। धन्यवाद!
+    </Say>
+</Response>"""
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.post("/api/voice/process")
+async def twilio_process_speech(request: Request):
+    """Twilio webhook: process the farmer's speech and respond with advisory."""
+    form = await request.form()
+    speech_result = form.get("SpeechResult", "")
+    caller = form.get("From", "unknown")
+    log.info(f"Speech from {caller}: {speech_result}")
+
+    if not speech_result:
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Aditi" language="hi-IN">
+        मुझे समझ नहीं आया। कृपया दोबारा बोलें।
+    </Say>
+    <Redirect method="POST">{base}/api/voice/incoming</Redirect>
+</Response>""".replace("{base}", BASE_URL)
+        return Response(content=twiml, media_type="application/xml")
+
+    try:
+        # Extract intent from speech using Gemini
+        intent_prompt = f"""Extract crop and location from this Indian farmer's speech:
+"{speech_result}"
+Return JSON only: {{"crop": "<crop in English>", "location": "<location name>", "language": "hi"}}"""
+
+        intent_resp = gemini_client.models.generate_content(
+            model="gemini-2.5-flash", contents=intent_prompt
+        )
+        intent_text = intent_resp.text.strip()
+        if intent_text.startswith("```"):
+            intent_text = intent_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        intent_data = json.loads(intent_text)
+
+        crop = intent_data.get("crop", "Tomato")
+        location_name = intent_data.get("location", "")
+
+        # Geocode the location
+        geo = await reverse_geocode_by_name(location_name) if location_name else {"latitude": 28.6139, "longitude": 77.2090}
+
+        # Get advisory
+        req = AdvisoryRequest(
+            latitude=geo.get("latitude", 28.6139),
+            longitude=geo.get("longitude", 77.2090),
+            crop=crop,
+            language="hi",
+            intent="full_advisory",
+        )
+        result = await _run_advisory(req)
+        advisory_text = result["advisory"]
+
+        # Respond with the advisory
+        # Escape XML special characters
+        safe_text = advisory_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Aditi" language="hi-IN">
+        {safe_text}
+    </Say>
+    <Pause length="1"/>
+    <Say voice="Polly.Aditi" language="hi-IN">
+        क्या आप कुछ और जानना चाहते हैं?
+    </Say>
+    <Gather input="speech" language="hi-IN" speechTimeout="3" timeout="8"
+            action="{BASE_URL}/api/voice/process" method="POST">
+        <Say voice="Polly.Aditi" language="hi-IN">
+            बोलिए।
+        </Say>
+    </Gather>
+    <Say voice="Polly.Aditi" language="hi-IN">
+        धन्यवाद! किसानमाइंड का उपयोग करने के लिए शुक्रिया। नमस्ते!
+    </Say>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
+
+    except Exception as e:
+        log.exception(f"Voice processing failed: {e}")
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Aditi" language="hi-IN">
+        माफ कीजिए, कुछ तकनीकी समस्या आ गई। कृपया थोड़ी देर बाद फिर से कॉल करें।
+    </Say>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
+
+
+async def reverse_geocode_by_name(location_name: str) -> dict:
+    """Geocode a location name to lat/lon."""
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    params = {"address": f"{location_name}, India", "key": GOOGLE_MAPS_API_KEY}
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(url, params=params)
+        data = resp.json()
+    if data.get("results"):
+        loc = data["results"][0]["geometry"]["location"]
+        return {"latitude": loc["lat"], "longitude": loc["lng"]}
+    return {"latitude": 28.6139, "longitude": 77.2090}  # Default: Delhi
 
 
 # ---------------------------------------------------------------------------
