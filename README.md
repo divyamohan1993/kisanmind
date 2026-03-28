@@ -1,168 +1,143 @@
-# KisanMind (किसानमाइंड) — Satellite-to-Voice Agricultural Intelligence
+<p align="center">
+  <img src="https://img.shields.io/badge/ET_AI_Hackathon-2026-22c55e?style=for-the-badge" alt="ET AI Hackathon 2026" />
+  <img src="https://img.shields.io/badge/Problem_5-Domain_AI_Agents-38bdf8?style=for-the-badge" alt="Problem 5" />
+  <img src="https://img.shields.io/badge/Status-Live-22c55e?style=for-the-badge" alt="Live" />
+</p>
 
-> **ET AI Hackathon 2026 — Problem Statement #5: Domain-Specialized AI Agents with Compliance Guardrails**
+<h1 align="center">KisanMind (किसानमाइंड)</h1>
+<h3 align="center">Satellite-to-Voice Agricultural Intelligence for 150M Indian Farmers</h3>
 
-KisanMind is a multi-agent agricultural advisory system that fuses **satellite crop health monitoring** + **real-time mandi price arbitrage** + **hyperlocal weather intelligence** + **voice-first multilingual delivery** into a single platform accessible through a phone call in any Indian language.
+<p align="center">
+  <b>Real Sentinel-2 NDVI</b> + <b>Live Mandi Prices</b> + <b>Weather Forecasts</b> + <b>Voice in 22 Languages</b>
+</p>
 
-A farmer calls, speaks in Hindi (or 8 other Indian languages), and gets:
-- **Satellite analysis**: NDVI-based crop health from Sentinel-2 imagery via Google Earth Engine
-- **Market intelligence**: Best mandi to sell at today, with net profit after transport costs
-- **Weather advisory**: Farming-specific DO/DON'T actions based on 5-day forecast
-- **All in 15 seconds**, through a voice response
+<p align="center">
+  <a href="https://kisanmind-409924770511.asia-south1.run.app/talk"><img src="https://img.shields.io/badge/Try_Voice_Call-22c55e?style=for-the-badge&logo=phone&logoColor=white" alt="Voice Call" /></a>
+  <a href="https://kisanmind-409924770511.asia-south1.run.app/demo"><img src="https://img.shields.io/badge/One_Click_Demo-6366f1?style=for-the-badge&logo=play&logoColor=white" alt="Demo" /></a>
+  <a href="https://kisanmind-409924770511.asia-south1.run.app"><img src="https://img.shields.io/badge/Dashboard-38bdf8?style=for-the-badge&logo=chart-bar&logoColor=white" alt="Dashboard" /></a>
+</p>
+
+---
+
+## The Problem
+
+India's **150 million farming households** make daily decisions worth **45 lakh crore annually** with:
+
+- Zero satellite visibility on crop health
+- No real-time mandi price comparison across markets
+- Generic weather forecasts that don't translate to farming actions
+- Advisory services only in English — useless for most farmers
+
+**KisanMind** fuses satellite imagery + mandi prices + weather + voice into one system accessible through **a phone call in any Indian language**.
+
+---
+
+## Live Demo
+
+| Interface | URL | For Whom |
+|-----------|-----|----------|
+| **Voice Call** | [/talk](https://kisanmind-409924770511.asia-south1.run.app/talk) | Farmers (tap one button, speak, hear advice) |
+| **One-Click Demo** | [/demo](https://kisanmind-409924770511.asia-south1.run.app/demo) | Judges (shows all data sources + value points) |
+| **Dashboard** | [/](https://kisanmind-409924770511.asia-south1.run.app) | Educated users (satellite map, charts, search) |
+| **Mandi Prices** | [/mandi](https://kisanmind-409924770511.asia-south1.run.app/mandi) | Price comparison with net profit ranking |
+| **Weather** | [/weather](https://kisanmind-409924770511.asia-south1.run.app/weather) | Crop-specific weather advisories |
+| **API** | [/api/health](https://kisanmind-api-409924770511.asia-south1.run.app/api/health) | Backend health check |
+
+---
+
+## How It Works
+
+A farmer calls or taps the app. They say:
+
+> *"Main Solan mein tamatar uga raha hoon"*
+> *(I'm growing tomatoes in Solan)*
+
+KisanMind responds in **their language** with real data:
+
+> *"Aapki GPS location se pata chala ki aap Solan mein hain. Kullu mandi mein tamatar ka bhav 2500 rupaye per quintal chal raha hai, jo yahan se 237 km door hai. Lekin transport nikaalke Solan ki apni mandi zyada faydemand hai — 2100 rupaye mein bhi aapko 1430 rupaye ka shudh munafa milega. Agle 2 din mein halki baarish hai, toh aaj harvest kar lein. Satellite se dekha — fasal mein thoda tanaav hai, sinchai kar dein."*
+
+This required fusing **5 real data sources** in real-time:
+1. **GPS** — Browser geolocation detected farmer's exact coordinates
+2. **Sentinel-2** — Earth Engine computed NDVI for crop health
+3. **AgMarkNet** — Government mandi prices from data.gov.in
+4. **Google Maps** — Real driving distances to each mandi
+5. **Open-Meteo** — 5-day hyperlocal weather forecast
+6. **Gemini 3.1 Pro** — Synthesized everything into conversational Hindi advice
 
 ---
 
 ## Architecture
 
 ```
-User (Voice/Web) → VaaniSetu (Voice Bridge) → KisanMind Brain (Orchestrator)
-                                                       │
-                              ┌─────────────────────────┼─────────────────────────┐
-                              ▼                         ▼                         ▼
-                        SatDrishti                MandiMitra                MausamGuru
-                    (Satellite Eye)            (Market Friend)           (Weather Guru)
-                    Earth Engine NDVI          AgMarkNet Prices          Weather Forecast
-                    Gemini Analysis            Profit Optimization       Crop-Weather Rules
+Farmer (Voice/Web/Phone) ──→ KisanMind Backend (FastAPI on Cloud Run)
+                                    │
+                    ┌───────────────┼───────────────┐───────────────┐
+                    ▼               ▼               ▼               ▼
+              Google Earth    AgMarkNet API    Open-Meteo      Google Maps
+              Engine NDVI     (data.gov.in)   Weather API     Distance Matrix
+              (Sentinel-2)    (Live Prices)   (5-day forecast) (Real driving km)
+                    │               │               │               │
+                    └───────────────┴───────────────┴───────────────┘
+                                    │
+                              Gemini 3.1 Pro ──→ Conversational Advisory
+                                    │
+                              Cloud TTS ──→ Voice Response (22 languages)
 ```
 
-### Four Specialist Agents
+### Data Flow — Zero Fake Data
 
-| Agent | Purpose | Data Sources |
-|-------|---------|-------------|
-| **SatDrishti** (सैटदृष्टि) | Crop health from satellite imagery | Google Earth Engine, Sentinel-2, Gemini 2.5 Pro |
-| **MandiMitra** (मंडीमित्र) | Best mandi to sell at today | AgMarkNet (data.gov.in), Google Maps Distance Matrix |
-| **MausamGuru** (मौसमगुरु) | Weather translated to farming actions | Google Weather API, crop-weather rule engine |
-| **VaaniSetu** (वाणीसेतु) | Voice interface in 9 Indian languages | Cloud STT/TTS, Cloud Translation, Gemini Flash |
-
-### Google Cloud Services (23 services)
-
-Earth Engine, Vertex AI Agent Engine, ADK, Gemini 2.5 Pro/Flash, Cloud STT V2, Cloud TTS Neural2, Cloud Translation, Dialogflow CX, Vertex AI Search, BigQuery, Cloud Run, Cloud Functions, Firestore, Cloud Storage, Maps Geocoding, Maps Distance Matrix, Pub/Sub, Cloud Logging, Model Armor, Secret Manager, Cloud Scheduler, Identity Platform.
+| Data | Source | Update Frequency |
+|------|--------|------------------|
+| Crop Health (NDVI/EVI/NDWI) | Sentinel-2 via Google Earth Engine (project: dmjone) | Weekly (satellite revisit) |
+| Mandi Prices | AgMarkNet / data.gov.in + GCS cache | Daily (government data) |
+| Driving Distances | Google Maps Distance Matrix API | Real-time |
+| Weather Forecast | Open-Meteo API | Hourly |
+| Advisory Generation | Gemini 3.1 Pro (with hallucination verification) | Per request |
+| Voice I/O | Google Cloud STT V2 + TTS Neural2/Wavenet | Real-time |
+| Translation | Google Cloud Translation API v3 | Real-time |
 
 ---
 
-## Quick Start
+## Key Features
 
-### Prerequisites
-- Python 3.11+
-- Node.js 20+
-- Google Cloud SDK (`gcloud`)
-- A Google Cloud project with billing enabled
+### Voice-First for Illiterate Farmers
+- **ONE tap** starts a phone-like conversation
+- Farmer speaks in any of **22 official Indian languages**
+- GPS auto-detects location — farmer only needs to say their crop
+- Advisory spoken back as natural conversation
+- Call ends automatically with full summary displayed
 
-### 1. Clone and Setup
+### Real Satellite Intelligence
+- Sentinel-2 imagery via Google Earth Engine
+- Real NDVI, EVI, NDWI values for the farmer's exact GPS coordinates
+- True-color and NDVI-overlay satellite thumbnail images
+- Crop health classified as Healthy / Moderate / Stressed with trend
 
-```bash
-git clone <repo-url>
-cd kisanmind
+### Smart Mandi Price Arbitrage
+- Live prices from AgMarkNet (data.gov.in) for 10+ crops
+- Real Google Maps driving distance to every mandi
+- Net profit = Price - Transport (3.5/km/qtl) - Commission (4%)
+- Ranked by net profit — farmer sees which mandi actually pays most
 
-# Copy environment template and fill in your API keys
-cp .env.example .env
-# Edit .env with your keys
+### Anti-Hallucination Guardrails
+- Gemini 3.1 Flash Lite fact-checks every advisory against source data
+- If FAIL detected, regenerates with stricter prompt
+- Never recommends pesticide brands/dosages — refers to KVK (1800-180-1551)
+- Never claims farmer said something they didn't
+- Every response cites data sources and freshness
 
-# Run automated setup (enables APIs, installs dependencies)
-chmod +x infrastructure/setup.sh
-./infrastructure/setup.sh
-```
+### 2-Tier Persistent Cache
+- L1: In-memory (instant, lost on restart)
+- L2: Google Cloud Storage (persistent across deploys, ~200ms)
+- Advisory: 15-min TTL | NDVI: 6-hour TTL | Mandi raw: 1-hour TTL
+- Every response includes `data_age_minutes` and `freshness_note`
+- Cached: **0.13s** | Fresh: **15-25s**
 
-### 2. Configure API Keys
-
-Edit `.env` with your keys:
-
-```env
-GOOGLE_CLOUD_PROJECT=your-project-id
-GOOGLE_CLOUD_REGION=asia-south1
-EE_PROJECT=your-earth-engine-project
-
-GOOGLE_MAPS_API_KEY=your-maps-api-key
-AGMARKNET_API_KEY=your-agmarknet-key
-```
-
-**How to get keys:**
-- **Google Maps API Key**: [Cloud Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials). Enable Geocoding API, Distance Matrix API, Weather API.
-- **AgMarkNet API Key**: [data.gov.in](https://data.gov.in) → Register → Request API key for commodity prices.
-- **Earth Engine**: Register at [earthengine.google.com](https://earthengine.google.com) → Non-commercial use.
-
-### 3. Run Locally
-
-**Backend (Python agents):**
-```bash
-source venv/bin/activate
-python -m agents.brain.orchestrator
-```
-
-**Frontend (Next.js dashboard):**
-```bash
-cd frontend
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000)
-
-### 4. Deploy to Cloud Run
-
-```bash
-chmod +x infrastructure/deploy.sh
-./infrastructure/deploy.sh
-```
-
----
-
-## Project Structure
-
-```
-├── agents/                    # Multi-agent backend (Python, ADK)
-│   ├── brain/                 # Orchestrator agent
-│   │   ├── orchestrator.py    # Routes intent → specialist agents
-│   │   └── config.yaml        # Agent configuration
-│   ├── sat_drishti/           # Satellite analysis agent
-│   │   ├── agent.py           # ADK agent definition
-│   │   ├── earth_engine.py    # Earth Engine NDVI computation
-│   │   └── ndvi_interpreter.py
-│   ├── mandi_mitra/           # Market intelligence agent
-│   │   ├── agent.py
-│   │   ├── agmarknet_client.py
-│   │   └── profit_optimizer.py
-│   ├── mausam_guru/           # Weather advisory agent
-│   │   ├── agent.py
-│   │   ├── openweather_client.py
-│   │   └── crop_weather_rules.py
-│   └── vaani_setu/            # Voice interface agent
-│       ├── agent.py
-│       ├── stt_handler.py
-│       ├── tts_handler.py
-│       └── intent_extractor.py
-│
-├── cloud_functions/           # Event-driven microservices
-│   ├── geocode/               # Location → lat/lon
-│   ├── fetch_mandi_prices/    # AgMarkNet API caller
-│   ├── fetch_weather/         # Weather API caller
-│   ├── compute_ndvi/          # Earth Engine NDVI caller
-│   └── calculate_profit/      # Transport + commission calc
-│
-├── data/
-│   ├── bigquery/              # Reference data (CSVs)
-│   │   ├── crop_calendar.csv
-│   │   ├── ndvi_benchmarks.csv
-│   │   └── mandi_master.csv
-│   ├── knowledge_base/        # RAG corpus for Vertex AI Search
-│   └── earth_engine/          # Earth Engine scripts
-│
-├── frontend/                  # Next.js web dashboard
-│   ├── app/
-│   │   ├── page.tsx           # Satellite view + voice input
-│   │   ├── mandi/page.tsx     # Mandi price comparison
-│   │   ├── weather/page.tsx   # Weather advisory
-│   │   └── components/        # React components
-│   └── public/demo-data/      # Standalone demo data
-│
-├── infrastructure/
-│   ├── setup.sh               # One-command project setup
-│   └── deploy.sh              # One-command Cloud Run deployment
-│
-├── demo/                      # Demo video script + sample queries
-├── Dockerfile                 # Multi-stage Docker build
-├── requirements.txt           # Python dependencies
-└── .env.example               # API key template
-```
+### Phone Call Support (Twilio-Ready)
+- `POST /api/voice/incoming` — Twilio webhook for incoming calls
+- `POST /api/voice/process` — Processes farmer's speech, returns TwiML advisory
+- Multi-turn conversation support
+- Connect any Twilio phone number and farmers can call
 
 ---
 
@@ -170,71 +145,173 @@ chmod +x infrastructure/deploy.sh
 
 | Layer | Technology |
 |-------|-----------|
-| Agent Framework | Google ADK (Agent Development Kit) |
-| LLM | Gemini 2.5 Pro (reasoning), Gemini 2.5 Flash (classification) |
-| Satellite | Google Earth Engine + Sentinel-2 |
-| Voice | Cloud Speech-to-Text V2 + Cloud Text-to-Speech Neural2 |
-| Frontend | Next.js 15, TypeScript, Tailwind CSS, Recharts |
-| Data | BigQuery, Firestore, Cloud Storage |
-| Deployment | Cloud Run, Cloud Functions |
-| External APIs | AgMarkNet (data.gov.in), Google Maps Platform |
+| **LLM** | Gemini 3.1 Pro (advisory) + Gemini 3.1 Flash Lite (intent/fact-check) |
+| **Satellite** | Google Earth Engine + Sentinel-2 (project: dmjone) |
+| **Voice** | Cloud Speech-to-Text V2 + Cloud TTS Wavenet/Neural2 |
+| **Translation** | Cloud Translation API v3 (22 Indian languages) |
+| **Frontend** | Next.js 16, TypeScript, Tailwind CSS, Recharts |
+| **Backend** | FastAPI, Python 3.12, async/await |
+| **Data** | AgMarkNet (data.gov.in), Open-Meteo, Google Maps Platform |
+| **Cache** | In-memory L1 + Google Cloud Storage L2 |
+| **Deployment** | Cloud Run (asia-south1), min-instances=1 |
+| **Phone** | Twilio voice webhooks (TwiML) |
+
+**Google Cloud Services Used**: Earth Engine, Cloud Run, Cloud STT V2, Cloud TTS, Cloud Translation, Cloud Storage, Secret Manager, Artifact Registry, Cloud Build
+
+---
+
+## Supported Languages (22 Scheduled Languages of India)
+
+| Language | Native Script | TTS Voice | STT |
+|----------|--------------|-----------|-----|
+| Hindi | हिन्दी | Wavenet-D | V2 |
+| English | English | Wavenet-D | V2 |
+| Tamil | தமிழ் | Wavenet-D | V2 |
+| Telugu | తెలుగు | Standard-A | V2 |
+| Bengali | বাংলা | Wavenet-D | V2 |
+| Marathi | मराठी | Wavenet-A | V2 |
+| Gujarati | ગુજરાતી | Wavenet-A | V2 |
+| Kannada | ಕನ್ನಡ | Wavenet-A | V2 |
+| Malayalam | മലയാളം | Wavenet-A | V2 |
+| Punjabi | ਪੰਜਾਬੀ | Wavenet-A | V2 |
+| Odia | ଓଡ଼ିଆ | Standard-A | V2 |
+| Assamese | অসমীয়া | Standard-A | V2 |
+| Maithili | मैथिली | via Hindi | via Hindi |
+| Sanskrit | संस्कृतम् | via Hindi | via Hindi |
+| Nepali | नेपाली | via Hindi | via Hindi |
+| Sindhi | سنڌي | via Hindi | via Hindi |
+| Dogri | डोगरी | via Hindi | via Hindi |
+| Kashmiri | كٲشُر | via Hindi | via Hindi |
+| Konkani | कोंकणी | via Hindi | via Hindi |
+| Santali | ᱥᱟᱱᱛᱟᱲᱤ | via Hindi | via Hindi |
+| Bodo | বোড়ো | via Hindi | via Hindi |
+| Manipuri | मणिपुरी | via Hindi | via Hindi |
+
+Languages without native TTS are auto-translated to Hindi for speech synthesis.
+
+---
+
+## Quick Start
+
+### Prerequisites
+- Python 3.12+ | Node.js 22+ | Google Cloud SDK
+
+### 1. Clone & Configure
+
+```bash
+git clone https://github.com/divyamohan1993/kisanmind.git
+cd kisanmind
+cp .env.example .env
+# Fill in: GOOGLE_MAPS_API_KEY, AGMARKNET_API_KEY, GEMINI_API_KEY
+```
+
+### 2. Run Backend
+
+```bash
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 8080
+```
+
+### 3. Run Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+# Open http://localhost:3000
+```
+
+### 4. Deploy to Cloud Run
+
+```bash
+# Backend
+cd backend && gcloud run deploy kisanmind-api --source . --region asia-south1
+
+# Frontend
+cd frontend && gcloud run deploy kisanmind --source . --region asia-south1
+```
+
+---
+
+## Project Structure
+
+```
+kisanmind/
+├── backend/
+│   ├── main.py              # FastAPI — all endpoints, all real APIs
+│   ├── Dockerfile
+│   └── requirements.txt
+├── frontend/
+│   ├── app/
+│   │   ├── talk/page.tsx     # Voice-first farmer interface
+│   │   ├── demo/page.tsx     # One-click judge demo
+│   │   ├── page.tsx          # Dashboard with real data
+│   │   ├── mandi/page.tsx    # Mandi price comparison
+│   │   ├── weather/page.tsx  # Weather advisory
+│   │   ├── api/advisory/     # API proxy route
+│   │   ├── hooks/            # useGeolocation
+│   │   └── components/       # SatelliteMap, Charts, VoiceInput, etc.
+│   └── Dockerfile
+├── agents/                   # ADK agent definitions (reference)
+├── cloud_functions/          # Standalone function implementations
+├── data/                     # CSV data, knowledge base, EE scripts
+├── demo/                     # Demo script, sample queries
+└── infrastructure/           # setup.sh, deploy.sh
+```
 
 ---
 
 ## Compliance Guardrails
 
-KisanMind enforces strict domain guardrails:
-
-| Never | Always |
-|-------|--------|
-| Recommend specific pesticide brands/dosages | Cite data source and date |
-| Provide loan or credit advice | Show confidence level |
-| Guarantee crop yields or prices | Add weather forecast uncertainty |
-| Override farmer's local knowledge | Log every recommendation with reasoning |
-
----
-
-## Edge Case Handling
-
-| Failure | Graceful Fallback |
-|---------|------------------|
-| Cloudy satellite imagery | Use last clear image + warn farmer |
-| AgMarkNet API down | Serve cached prices from BigQuery with timestamp |
-| Weather API failure | Fall back to Google Maps weather data |
-| Speech recognition fails | Ask to repeat, offer DTMF fallback, or SMS mode |
-| Location not recognized | Progressive narrowing: village → district → state |
-| Unknown crop | Provide weather + mandi data, refer to local KVK |
+| Rule | Implementation |
+|------|---------------|
+| No pesticide brand/dosage recommendations | Gemini system prompt + fact-check |
+| No loan/credit advice | Blocked in prompt |
+| No yield guarantees | "Based on current data" disclaimer always added |
+| Data source citation | Every response cites AgMarkNet, EE, Open-Meteo |
+| Hallucination detection | Flash Lite verifies advisory against source data |
+| KVK referral | Pest/disease queries directed to KVK helpline 1800-180-1551 |
+| Audit trail | Every request logged with sources, timestamps, reasoning |
 
 ---
 
 ## Impact Model
 
-| Metric | Year 1 | Year 3 | Year 5 |
-|--------|--------|--------|--------|
-| Farmers reached | 100,000 | 2,000,000 | 20,000,000 |
-| Avg price gain (mandi arbitrage) | ₹2,000/season | ₹3,000/season | ₹3,500/season |
-| Total income improvement | ₹20 Cr | ₹600 Cr | ₹7,000 Cr |
+| Metric | Conservative (Year 1) |
+|--------|----------------------|
+| Farmers reached | 100,000 |
+| Avg mandi arbitrage gain | 2,000/season per farmer |
+| Crop loss prevented | 5% (weather-timed harvesting) |
+| Languages served | 22 (all scheduled) |
 
-**One farmer's math**: A Solan tomato farmer gains ₹34,000/year — ₹12,000/harvest from mandi arbitrage (Shimla vs Solan) + ₹10,000 saved from weather-timed harvesting. That's a **30% income increase**.
-
----
-
-## Low-Connectivity Design
-
-| Tier | Interface | Coverage |
-|------|-----------|----------|
-| Tier 1 | Full web dashboard (4G/5G) | ~35% of farmers |
-| **Tier 2** | **Voice call (2G)** — primary mode | **~60% of farmers** |
-| Tier 3 | SMS fallback | ~98% of farmers |
-| Tier 4 | Missed call trigger | ~99% of farmers |
-| Tier 5 | Proactive daily SMS push | 100% registered |
+**One farmer's math**: Solan tomato farmer gains **34,000/year** — 12,000/harvest from mandi arbitrage + 10,000 saved from weather-timed harvesting = **30% income increase**.
 
 ---
 
-## Team
+## API Endpoints
 
-Built for the ET AI Hackathon 2026 — Phase II Prototype Submission.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/advisory` | Full advisory (mandi + weather + satellite + Gemini) |
+| `POST` | `/api/ndvi` | Sentinel-2 NDVI/EVI/NDWI with thumbnail URLs |
+| `POST` | `/api/tts` | Text-to-speech (22 languages, Wavenet voices) |
+| `POST` | `/api/stt` | Speech-to-text (multipart audio or base64 JSON) |
+| `POST` | `/api/extract-intent` | Gemini-powered intent extraction from speech |
+| `POST` | `/api/voice/incoming` | Twilio webhook — incoming call handler |
+| `POST` | `/api/voice/process` | Twilio webhook — process speech, return advisory |
+| `GET` | `/api/health` | Service health + API status |
 
-## License
+---
 
-MIT
+## Contact
+
+Built for the **ET AI Hackathon 2026** — Phase II Prototype Submission
+
+**Contact**: contact@dmj.one
+
+---
+
+<p align="center">
+  <sub>100% real data. Zero fake. Every data point from a real API call.</sub>
+</p>
