@@ -47,6 +47,13 @@ interface ApiResponse {
     }>;
     summary?: string;
   };
+  satellite?: {
+    ndvi?: number;
+    health?: string;
+    trend?: string;
+    true_color_url?: string;
+    ndvi_color_url?: string;
+  };
   advisory?: string;
   sources?: Record<string, unknown>;
   error?: string;
@@ -57,11 +64,14 @@ function mapApiToState(api: ApiResponse) {
     ? `${api.location.location_name || "Unknown"}, ${api.location.state || ""}`
     : "Unknown";
 
-  // Build satellite data from advisory text (extract NDVI if mentioned)
-  const ndviMatch = api.advisory?.match(/NDVI[:\s]*([0-9.]+)/i);
-  const ndviValue = ndviMatch ? parseFloat(ndviMatch[1]) : 0.65;
+  // Build satellite data — prefer structured satellite response, fall back to parsing advisory text
+  const satNdvi = api.satellite?.ndvi;
+  const ndviFromText = api.advisory?.match(/NDVI[:\s]*([0-9.]+)/i);
+  const ndviValue = satNdvi != null ? satNdvi : ndviFromText ? parseFloat(ndviFromText[1]) : 0.65;
   const ndviStatus: "healthy" | "moderate" | "stressed" =
     ndviValue >= 0.6 ? "healthy" : ndviValue >= 0.3 ? "moderate" : "stressed";
+  const trueColorUrl = api.satellite?.true_color_url;
+  const ndviColorUrl = api.satellite?.ndvi_color_url;
 
   // Map mandi data
   const bestMandi = api.best_mandi;
@@ -131,7 +141,7 @@ function mapApiToState(api: ApiResponse) {
   return {
     location: locationName,
     crop: api.crop || "Tomato",
-    satellite: { ndvi: ndviValue, status: ndviStatus, trend: "stable" as const },
+    satellite: { ndvi: ndviValue, status: ndviStatus, trend: "stable" as const, trueColorUrl, ndviColorUrl },
     mandi: {
       bestMandi: bestMandi?.market || "N/A",
       bestPrice: bestMandi?.modal_price || 0,
@@ -171,11 +181,24 @@ export default function Dashboard() {
           body.longitude = geo.longitude;
         }
 
-        const res = await fetch(`${API_BASE}/api/advisory`, {
+        // Fire advisory and NDVI requests in parallel
+        const advisoryPromise = fetch(`${API_BASE}/api/advisory`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
+
+        const ndviBody = {
+          latitude: (body.latitude as number) ?? 30.9,
+          longitude: (body.longitude as number) ?? 77.1,
+        };
+        const ndviPromise = fetch(`${API_BASE}/api/ndvi`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ndviBody),
+        }).catch(() => null); // NDVI is optional — don't fail advisory if it errors
+
+        const [res, ndviRes] = await Promise.all([advisoryPromise, ndviPromise]);
 
         if (!res.ok) {
           const errBody = await res.json().catch(() => ({}));
@@ -185,6 +208,33 @@ export default function Dashboard() {
         const result: ApiResponse = await res.json();
         if (result.error) {
           throw new Error(result.error);
+        }
+
+        // Merge NDVI satellite URLs into result if advisory didn't already have them
+        if (ndviRes && ndviRes.ok) {
+          try {
+            const ndviData = await ndviRes.json();
+            if (!result.satellite) {
+              result.satellite = {};
+            }
+            if (ndviData.true_color_url && !result.satellite.true_color_url) {
+              result.satellite.true_color_url = ndviData.true_color_url;
+            }
+            if (ndviData.ndvi_color_url && !result.satellite.ndvi_color_url) {
+              result.satellite.ndvi_color_url = ndviData.ndvi_color_url;
+            }
+            if (ndviData.ndvi != null && result.satellite.ndvi == null) {
+              result.satellite.ndvi = ndviData.ndvi;
+            }
+            if (ndviData.health && !result.satellite.health) {
+              result.satellite.health = ndviData.health;
+            }
+            if (ndviData.trend && !result.satellite.trend) {
+              result.satellite.trend = ndviData.trend;
+            }
+          } catch {
+            // ignore NDVI parse errors
+          }
         }
 
         setData(mapApiToState(result));
@@ -312,6 +362,7 @@ export default function Dashboard() {
             location={data?.location || "Loading..."}
             ndvi={data?.satellite.ndvi ?? 0}
             status={data?.satellite.status ?? "moderate"}
+            imageUrl={data?.satellite.trueColorUrl}
           />
         )}
       </div>

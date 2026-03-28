@@ -6,12 +6,14 @@ interface SatelliteMapProps {
   location?: string;
   ndvi?: number;
   status?: "healthy" | "moderate" | "stressed";
+  imageUrl?: string;
 }
 
 export default function SatelliteMap({
   location = "Solan, Himachal Pradesh",
   ndvi = 0.72,
   status = "healthy",
+  imageUrl,
 }: SatelliteMapProps) {
   const statusColor =
     status === "healthy"
@@ -29,66 +31,79 @@ export default function SatelliteMap({
 
   return (
     <div className="relative overflow-hidden rounded-2xl border border-white/5">
-      {/* Satellite field imagery simulation */}
-      <div className="ndvi-field relative h-64 sm:h-80 lg:h-96">
+      {/* Satellite field imagery */}
+      <div className={`relative h-64 sm:h-80 lg:h-96 ${!imageUrl ? 'ndvi-field' : 'bg-black'}`}>
+        {/* Real satellite image (when available) */}
+        {imageUrl && (
+          <img
+            src={imageUrl}
+            alt={`Sentinel-2 satellite imagery near ${location}`}
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        )}
+
         {/* Scan line effect */}
         <div className="scan-line" />
 
-        {/* Field grid overlay */}
-        <svg
-          className="absolute inset-0 h-full w-full opacity-20"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <defs>
-            <pattern
-              id="field-grid"
-              width="60"
-              height="60"
-              patternUnits="userSpaceOnUse"
+        {/* Field grid overlay (only when no real image) */}
+        {!imageUrl && (
+          <>
+            <svg
+              className="absolute inset-0 h-full w-full opacity-20"
+              xmlns="http://www.w3.org/2000/svg"
             >
-              <path
-                d="M 60 0 L 0 0 0 60"
-                fill="none"
-                stroke="rgba(34,197,94,0.3)"
-                strokeWidth="0.5"
-              />
-            </pattern>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#field-grid)" />
-        </svg>
+              <defs>
+                <pattern
+                  id="field-grid"
+                  width="60"
+                  height="60"
+                  patternUnits="userSpaceOnUse"
+                >
+                  <path
+                    d="M 60 0 L 0 0 0 60"
+                    fill="none"
+                    stroke="rgba(34,197,94,0.3)"
+                    strokeWidth="0.5"
+                  />
+                </pattern>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#field-grid)" />
+            </svg>
 
-        {/* Field parcel outlines */}
-        <svg
-          className="absolute inset-0 h-full w-full"
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 400 300"
-          preserveAspectRatio="none"
-        >
-          <polygon
-            points="50,80 180,60 200,160 70,180"
-            fill="rgba(34,197,94,0.15)"
-            stroke="rgba(34,197,94,0.4)"
-            strokeWidth="1"
-          />
-          <polygon
-            points="200,50 340,70 350,180 210,160"
-            fill="rgba(34,197,94,0.1)"
-            stroke="rgba(34,197,94,0.3)"
-            strokeWidth="1"
-          />
-          <polygon
-            points="60,190 200,170 220,260 80,270"
-            fill="rgba(234,179,8,0.12)"
-            stroke="rgba(234,179,8,0.35)"
-            strokeWidth="1"
-          />
-          <polygon
-            points="230,170 360,190 370,270 240,260"
-            fill="rgba(239,68,68,0.08)"
-            stroke="rgba(239,68,68,0.25)"
-            strokeWidth="1"
-          />
-        </svg>
+            {/* Field parcel outlines */}
+            <svg
+              className="absolute inset-0 h-full w-full"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 400 300"
+              preserveAspectRatio="none"
+            >
+              <polygon
+                points="50,80 180,60 200,160 70,180"
+                fill="rgba(34,197,94,0.15)"
+                stroke="rgba(34,197,94,0.4)"
+                strokeWidth="1"
+              />
+              <polygon
+                points="200,50 340,70 350,180 210,160"
+                fill="rgba(34,197,94,0.1)"
+                stroke="rgba(34,197,94,0.3)"
+                strokeWidth="1"
+              />
+              <polygon
+                points="60,190 200,170 220,260 80,270"
+                fill="rgba(234,179,8,0.12)"
+                stroke="rgba(234,179,8,0.35)"
+                strokeWidth="1"
+              />
+              <polygon
+                points="230,170 360,190 370,270 240,260"
+                fill="rgba(239,68,68,0.08)"
+                stroke="rgba(239,68,68,0.25)"
+                strokeWidth="1"
+              />
+            </svg>
+          </>
+        )}
 
         {/* Corner coordinates display */}
         <div className="absolute left-3 top-3 flex items-center gap-1.5 rounded-lg bg-black/60 px-2.5 py-1.5 text-[10px] font-mono text-white/60 backdrop-blur-sm">

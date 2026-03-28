@@ -723,6 +723,19 @@ def _compute_ndvi_sync(lat: float, lon: float) -> dict:
         except Exception:
             trend = "unknown"
 
+    # Generate real satellite thumbnail URLs
+    vis_params_true = {'bands': ['B4', 'B3', 'B2'], 'min': 0, 'max': 3000, 'dimensions': 512}
+    vis_params_ndvi = {'min': 0, 'max': 0.8, 'palette': ['red', 'orange', 'yellow', 'lightgreen', 'green', 'darkgreen'], 'dimensions': 512}
+
+    try:
+        ndvi_img = ndvi  # already computed above
+        true_color_url = latest.select(['B4', 'B3', 'B2']).getThumbURL({**vis_params_true, 'region': buffer})
+        ndvi_color_url = ndvi_img.getThumbURL({**vis_params_ndvi, 'region': buffer})
+    except Exception as e:
+        log.warning(f"Failed to generate thumbnail URLs: {e}")
+        true_color_url = None
+        ndvi_color_url = None
+
     # Classify health
     if ndvi_val is None:
         health = "Unknown"
@@ -743,6 +756,8 @@ def _compute_ndvi_sync(lat: float, lon: float) -> dict:
         "health": health,
         "image_date": image_date,
         "images_found": count,
+        "true_color_url": true_color_url,
+        "ndvi_color_url": ndvi_color_url,
         "source": f"Sentinel-2 via Google Earth Engine (project: {EE_PROJECT})",
     }
 
