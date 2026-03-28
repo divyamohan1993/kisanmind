@@ -639,7 +639,59 @@ Every advisory generates a log entry:
 
 ---
 
-## 6. Google Cloud Service Map
+## 6. Low-Connectivity Design — Graceful Degradation
+
+The Problem 5 statement specifically requires solutions that work "even in low-connectivity environments." KisanMind addresses this through a five-tier degradation model — every tier delivers value, no tier is a dead end.
+
+### Tier 1: Smartphone + 4G/5G (~35% of farmers)
+Full web dashboard — satellite map with NDVI overlay, mandi price charts, voice + text chat, interactive visualizations. The richest experience.
+
+### Tier 2: Basic phone + 2G voice call (~60% of farmers) — PRIMARY MODE
+**This is KisanMind's default interface.** A voice call requires zero data, zero internet, zero smartphone. The farmer speaks on a 2G call at 9.6 kbps. All heavy computation (Earth Engine NDVI, Gemini reasoning, AgMarkNet price lookup, OpenWeatherMap forecast) runs entirely in the cloud. The farmer's phone does nothing except transmit voice. Works on any ₹500 feature phone.
+
+### Tier 3: SMS fallback (~98% of farmers)
+When voice calls are unreliable (poor signal, noisy environment), farmers can send a simple SMS:
+
+```
+Farmer sends: "TOMATO SOLAN"
+System replies (160 chars):
+"Solan ₹1800 Shimla ₹2400(best) Rain 2d
+NDVI OK. Harvest tmrw. Transport ₹200"
+```
+
+**Implementation**: Cloud Functions receives SMS via Twilio/MSG91 webhook → parses crop + location → runs same agent pipeline in text mode → compresses response to 160 characters → sends SMS reply. Cost: ~₹0.25 per SMS.
+
+### Tier 4: Missed call trigger (~99% of farmers)
+Zero cost to farmer. Farmer gives a missed call to the KisanMind number. Cloud Scheduler has already pre-computed their daily advisory (registered crop + location). System calls back within 2 minutes with a 30-second voice advisory. This is the proven mKisan model that already works across India.
+
+### Tier 5: Proactive daily SMS push (100% of registered farmers)
+No farmer action needed. Every morning at 6 AM, Cloud Scheduler triggers a batch job:
+
+```
+For each registered farmer:
+  1. Fetch latest mandi prices for their crop + district
+  2. Check weather forecast for their coordinates
+  3. Check if NDVI changed significantly (weekly satellite refresh)
+  4. Generate 160-char SMS advisory
+  5. Send via SMS gateway
+```
+
+The intelligence comes TO the farmer. Works even with intermittent connectivity — the SMS arrives whenever signal becomes available.
+
+### GCloud services for low-connectivity tiers
+
+| Tier | GCloud Services Used |
+|------|---------------------|
+| Voice (2G) | Dialogflow CX + Cloud STT/TTS (all cloud-side) |
+| SMS | Cloud Functions + Pub/Sub + SMS gateway (Twilio/MSG91) |
+| Missed call | Cloud Scheduler + Cloud Functions + TTS |
+| Proactive push | Cloud Scheduler + BigQuery (batch query) + SMS gateway |
+
+**Hackathon scope**: Tiers 1, 2, and 3 are implemented in the prototype. Tiers 4 and 5 are documented in the architecture as production roadmap.
+
+---
+
+## 7. Google Cloud Service Map
 
 | # | Service | Role | Project |
 |---|---------|------|---------|
@@ -671,7 +723,7 @@ Every advisory generates a log entry:
 
 ---
 
-## 7. Data Architecture
+## 8. Data Architecture
 
 ### Pre-loaded Reference Data (BigQuery)
 
@@ -731,7 +783,7 @@ Knowledge Base: Crop Advisory Corpus
 
 ---
 
-## 8. Web Dashboard Design
+## 9. Web Dashboard Design
 
 The web dashboard serves two purposes: a rich visual experience for demo, and a practical tool for farmers with smartphones.
 
@@ -797,7 +849,7 @@ The web dashboard serves two purposes: a rich visual experience for demo, and a 
 
 ---
 
-## 9. Demo Script (2.5 minutes)
+## 10. Demo Script (2.5 minutes)
 
 ### Opening (15 seconds)
 *[Screen: India map with 750 million field parcels statistic]*
@@ -848,7 +900,7 @@ Quick flashes:
 
 ---
 
-## 10. Impact Model
+## 11. Impact Model
 
 | Metric | Year 1 (Conservative) | Year 3 | Year 5 |
 |--------|----------------------|--------|--------|
@@ -872,7 +924,7 @@ Quick flashes:
 
 ---
 
-## 11. 24-Hour Build Timeline
+## 12. 24-Hour Build Timeline
 
 | Hours | Task | Deliverable |
 |-------|------|-------------|
@@ -894,7 +946,7 @@ Quick flashes:
 
 ---
 
-## 12. Repository Structure
+## 13. Repository Structure
 
 ```
 kisanmind/
@@ -973,7 +1025,7 @@ kisanmind/
 
 ---
 
-## 13. Why KisanMind Wins the Top 20
+## 14. Why KisanMind Wins the Top 20
 
 | Criterion (20% each) | KisanMind's Edge |
 |----------------------|-----------------|
