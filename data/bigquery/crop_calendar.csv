@@ -1,0 +1,13 @@
+crop,variety,region,season,sowing_start,sowing_end,harvest_start,harvest_end,growth_days,optimal_temp_min,optimal_temp_max,water_requirement_mm,ndvi_peak_expected
+Tomato,Pusa Ruby,Himachal_mid_hills,kharif,2026-03-15,2026-04-15,2026-06-15,2026-07-30,90,18,30,500,0.75
+Tomato,Pusa Ruby,Himachal_mid_hills,rabi,2026-09-01,2026-10-01,2026-12-01,2027-01-15,100,15,28,450,0.72
+Wheat,HD-2967,Punjab_plains,rabi,2025-11-01,2025-11-30,2026-03-15,2026-04-15,135,10,25,400,0.68
+Wheat,HD-2967,Haryana_plains,rabi,2025-11-01,2025-11-30,2026-03-15,2026-04-15,135,10,25,380,0.65
+Rice,Pusa Basmati,Punjab_plains,kharif,2026-06-15,2026-07-15,2026-10-01,2026-11-15,120,22,35,1200,0.70
+Rice,Swarna,Andhra_coastal,kharif,2026-06-01,2026-07-01,2026-09-15,2026-10-30,110,24,36,1400,0.72
+Apple,Royal Delicious,Himachal_high_hills,perennial,,,2026-08-15,2026-10-30,365,5,25,750,0.80
+Apple,Red Delicious,Kashmir_valley,perennial,,,2026-08-20,2026-11-15,365,4,24,700,0.82
+Coffee,Robusta,Coorg_western_ghats,perennial,,,2026-11-01,2027-02-28,365,15,30,1500,0.78
+Coffee,Arabica,Coorg_western_ghats,perennial,,,2026-10-15,2027-01-31,365,15,28,1600,0.76
+Potato,Kufri Jyoti,Himachal_mid_hills,rabi,2026-01-15,2026-02-15,2026-05-01,2026-06-15,100,12,24,500,0.60
+Maize,HQPM-1,Punjab_plains,kharif,2026-06-15,2026-07-15,2026-09-15,2026-10-30,95,20,35,600,0.70

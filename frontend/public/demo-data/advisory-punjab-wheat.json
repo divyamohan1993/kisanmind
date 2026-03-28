@@ -1,0 +1,23 @@
+{
+  "status": "success",
+  "location": "Ludhiana, Punjab",
+  "crop": "Wheat",
+  "satellite": {
+    "ndvi": 0.62,
+    "trend": "declining",
+    "health": "Moderate - approaching maturity",
+    "confidence": 0.88
+  },
+  "mandi": {
+    "best_mandi": "Ludhiana",
+    "best_price": 2275,
+    "local_price": 2275,
+    "price_advantage": 0
+  },
+  "weather": {
+    "summary": "Hot and dry week. Harvest conditions favorable.",
+    "rain_days": 0,
+    "total_rain_mm": 0
+  },
+  "advisory": "Wheat is entering maturity (NDVI declining normally to 0.62). MSP is Rs 2,275/qtl at Ludhiana mandi. Hot dry weather ideal for harvest in 10-14 days. No rain expected. Monitor for lodging."
+}

@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 .next/
 venv/
+*.egg-info/
+dist/
+build/
+.DS_Store
+*.log

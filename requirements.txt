@@ -1,0 +1,32 @@
+# KisanMind — Python Dependencies
+# Agent framework
+google-adk>=0.3.0
+google-cloud-aiplatform>=1.74.0
+google-generativeai>=0.8.0
+
+# Google Cloud services
+google-cloud-speech>=2.27.0
+google-cloud-texttospeech>=2.21.0
+google-cloud-translate>=3.16.0
+google-cloud-firestore>=2.19.0
+google-cloud-bigquery>=3.25.0
+google-cloud-storage>=2.18.0
+google-cloud-logging>=3.11.0
+google-cloud-pubsub>=2.23.0
+google-cloud-secret-manager>=2.21.0
+google-cloud-functions>=1.16.0
+
+# Earth Engine
+earthengine-api>=1.2.0
+
+# External APIs
+requests>=2.32.0
+
+# Web framework (for cloud functions + API)
+flask>=3.1.0
+functions-framework>=3.8.0
+
+# Utilities
+python-dotenv>=1.0.1
+pydantic>=2.9.0
+numpy>=1.26.0
