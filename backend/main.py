@@ -410,8 +410,9 @@ Keep it conversational — like talking to a friend on phone. Under 200 words.
 Add disclaimer: "Yeh data aaj ki AgMarkNet aur mausam report se hai. Final faisla aap ka hai."
 """
 
+    # Use Gemini 3.1 Pro for rich conversational advisory
     response = gemini_client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.1-pro-preview",
         contents=prompt,
     )
     return response.text
@@ -450,6 +451,26 @@ async def advisory(req: AdvisoryRequest):
 
 
 async def _run_advisory(req: AdvisoryRequest):
+    crop = req.crop
+
+    # If crop is "auto" or empty, extract from the intent/transcript using Gemini
+    if not crop or crop.lower() == "auto":
+        intent_text = req.intent or ""
+        if intent_text:
+            try:
+                extract_resp = gemini_client.models.generate_content(
+                    model="gemini-3.1-flash-lite-preview",
+                    contents=f'Extract the crop name from this farmer\'s speech. Return ONLY the crop name in English (e.g., "Tomato", "Wheat", "Rice"). If no crop mentioned, return "Tomato".\n\nSpeech: "{intent_text}"',
+                )
+                crop = extract_resp.text.strip().strip('"').strip("'")
+                if not crop or len(crop) > 30:
+                    crop = "Tomato"
+            except Exception:
+                crop = "Tomato"
+        else:
+            crop = "Tomato"
+        log.info(f"Auto-detected crop: {crop}")
+
     # 1. Geocode + weather in PARALLEL (both only need lat/lon)
     location_task = asyncio.create_task(reverse_geocode(req.latitude, req.longitude))
     weather_task = asyncio.create_task(fetch_weather(req.latitude, req.longitude))
@@ -458,7 +479,7 @@ async def _run_advisory(req: AdvisoryRequest):
     log.info(f"Location: {location}")
 
     # 2. Mandi prices (needs state from geocode)
-    mandis = await fetch_mandi_prices(req.crop, location["state"])
+    mandis = await fetch_mandi_prices(crop, location["state"])
     log.info(f"Found {len(mandis)} mandis with prices")
 
     # 3. Distances + wait for weather in PARALLEL
@@ -483,7 +504,7 @@ async def _run_advisory(req: AdvisoryRequest):
         language=req.language,
         location_name=location["location_name"],
         state=location["state"],
-        crop=req.crop,
+        crop=crop,
         mandis=mandis,
         best_mandi=best_mandi,
         local_mandi=local_mandi,
@@ -492,7 +513,7 @@ async def _run_advisory(req: AdvisoryRequest):
 
     return {
         "location": location,
-        "crop": req.crop,
+        "crop": crop,
         "language": req.language,
         "mandi_prices": mandis,
         "best_mandi": best_mandi,
@@ -639,7 +660,7 @@ Return ONLY valid JSON (no markdown, no explanation):
 
     try:
         response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.1-flash-lite-preview",
             contents=prompt,
         )
         text = response.text.strip()
@@ -723,7 +744,7 @@ async def twilio_process_speech(request: Request):
 Return JSON only: {{"crop": "<crop in English>", "location": "<location name>", "language": "hi"}}"""
 
         intent_resp = gemini_client.models.generate_content(
-            model="gemini-2.5-flash", contents=intent_prompt
+            model="gemini-3.1-flash-lite-preview", contents=intent_prompt
         )
         intent_text = intent_resp.text.strip()
         if intent_text.startswith("```"):
