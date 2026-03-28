@@ -18,7 +18,7 @@
 | Phase III — Top 20 Presentations (Grand Finale) | TBA | **Our target** |
 | Winners Announced (Top 3) | TBA | Upcoming |
 
-**Goal: Crack the Top 20.** Phase II submissions are scored to select 20 finalists from all shortlisted teams. Only those 20 present at the Grand Finale. Everything below is oriented toward maximizing our score across the 5 judging criteria.
+**Goal: Crack the Top 20.** Phase II submissions are scored to select 20 finalists from all shortlisted teams. Only those 20 present at the Grand Finale. Everything below is oriented toward maximizing our score.
 
 ---
 
@@ -32,33 +32,45 @@ Build a domain-specific AI agent for healthcare, finance, supply chain, or **agr
 
 ---
 
-## Judging Criteria — What Gets Us Into the Top 20
-
-Each criterion is weighted equally at **20%**. To break into the top 20, we need to score high on ALL five — not just technical depth.
-
-| Criterion (20%) | What Judges Look For | How KisanMind Addresses It |
-|-----------------|---------------------|---------------------------|
-| **Innovation & Creativity** | Fresh perspective, unique Gen-AI approach | Multi-agent architecture (5 specialized agents), satellite NDVI + mandi price fusion, 5-tier connectivity degradation (smartphone → SMS → missed call) — no other team likely combines Earth Engine + voice-first + agriculture |
-| **Technical Implementation** | Code quality, Gen-AI use, scalability, soundness | Gemini 2.5 orchestration, Vertex AI Agent Builder, Cloud STT/TTS for Hindi voice, Earth Engine API for NDVI, real AgMarkNet + OpenWeatherMap integrations, Firestore for state, proper error handling at every agent boundary |
-| **Practical Impact** | Real-world problem, significant potential impact | 150M+ Indian farmers, 30% income increase demonstrated (₹34,000/year per farmer in our impact model), addresses post-harvest losses, mandi price arbitrage, weather-timed harvesting — backed with specific math |
-| **User Experience** | Ease of use, interface, accessibility | Voice-first design works on any ₹500 feature phone via 2G call — zero smartphone/internet/literacy requirement. Web dashboard for demo. Hindi-language interaction. SMS fallback. Onboarding in 60 seconds |
-| **Pitch Quality** | Presentation clarity, demo quality, value proposition | 3-min demo script: live voice call → satellite analysis → mandi recommendation → all 5 agents visible. Architecture diagram. Clear impact numbers. "One farmer's story" narrative |
-
----
-
-## Phase II Submission Checklist
+## Phase II Submission Requirements
 
 All submissions via the **Unstop platform** only. All links must be **public and accessible**. Deadline: **29 March 2026**.
 
 | # | Deliverable | What Makes It Top-20 Quality | Status |
 |---|-------------|------------------------------|--------|
-| 1 | **Public GitHub Repository** | Clean structure, meaningful commits showing build process, clear README with setup instructions, well-commented code | |
-| 2 | **Architecture Document** | 1–2 page diagram showing all 5 agent roles (VaaniSetu, FasalNetra, MandiMitra, MausamGuru, SalahBot), how they communicate, tool integrations, error-handling logic | |
-| 3 | **Readme Documentation** | Setup instructions, tech stack, solution approach, how to run the prototype, API keys needed | |
-| 4 | **Functional Prototype** | Working demo — voice call triggers agent pipeline, returns advisory. All 5 agents functional. Edge cases handled gracefully | |
-| 5 | **3-Minute Demo Video** | End-to-end walkthrough: farmer calls → STT → agents reason → satellite + mandi + weather → TTS response. Show agent completing full workflow start to finish | |
-| 6 | **Impact Model** | Quantified: ₹34,000/year per farmer, 30% income increase, 150M addressable users. Transport cost math. Post-harvest loss reduction. Back-of-envelope but logic holds | |
-| 7 | **Idea PPT** | Problem → Solution → Architecture → Demo highlights → Impact numbers → Why KisanMind wins | |
+| 1 | **System Architecture Diagram (PDF/PNG)** | 1–2 page visual showing all 5 agent roles (VaaniSetu, FasalNetra, MandiMitra, MausamGuru, SalahBot), inter-agent communication, tool integrations (Earth Engine, AgMarkNet, OpenWeatherMap, Gemini), error-handling logic, data flow from voice input to advisory output | |
+| 2 | **Functional Prototype** | Working demo — voice call triggers agent pipeline, returns advisory. All 5 agents functional. Edge cases handled gracefully (cloudy satellite, API failures, unrecognized speech). Low-connectivity tiers working | |
+| 3 | **Public GitHub Repository** | Clean structure, meaningful commits showing build process, well-commented code, proper README with setup instructions | |
+| 4 | **2–3 Minute Demo Video** | End-to-end walkthrough: farmer calls → STT → agents reason → satellite + mandi + weather → TTS response. Show agent completing full workflow start to finish. Show edge-case handling | |
+| 5 | **README / Documentation** | Setup instructions, tech stack, solution approach, how to run the prototype, API keys needed, architecture overview | |
+
+---
+
+## Phase II Evaluation Parameters
+
+These are the **actual Phase II scoring criteria** used to select the Top 20 finalists:
+
+| Parameter | What Judges Score | How KisanMind Scores High |
+|-----------|-------------------|--------------------------|
+| **Code Quality & Architecture** | Clean code, modular design, proper separation of concerns, scalable architecture | 5 specialized agents with clear boundaries, Cloud Functions per agent, Firestore for state, Pub/Sub for inter-agent messaging, proper error handling at every boundary, meaningful commit history |
+| **Creativity of Solution** | Novel approach, unique Gen-AI application, innovative thinking | Multi-agent orchestration with satellite NDVI + mandi price fusion + weather forecasting — no other team likely combines Earth Engine + voice-first + agriculture. 5-tier connectivity degradation (smartphone → 2G voice → SMS → missed call → proactive push) |
+| **Working Demo** | Functional prototype, end-to-end workflow completion, reliability | Live voice call in Hindi → STT → 5 agents execute in parallel → satellite analysis + best mandi + weather advisory → TTS response in 30 seconds. Graceful degradation when APIs fail. First-time onboarding flow |
+| **Documentation Clarity** | Clear README, architecture explained, easy to understand and reproduce | Architecture doc with agent roles, data flow diagrams, API integration details, edge-case handling table, setup instructions, tech stack rationale |
+| **Real Business Impact** | Quantified impact, addressable market, believable math | 150M+ Indian farmers, ₹34,000/year income increase per farmer (30% gain), specific math: Solan→Shimla tomato arbitrage saves ₹12,000/harvest, weather-timed picking prevents ₹10,000 spoilage. ET revenue alignment: 150M new users for ET platform |
+
+---
+
+## General Judging Criteria (from Hackathon Page)
+
+These are the overall hackathon evaluation criteria (20% each) — Phase II parameters above are the immediate filter for Top 20 selection:
+
+| Criterion (20%) | What Judges Look For | How KisanMind Addresses It |
+|-----------------|---------------------|---------------------------|
+| **Innovation & Creativity** | Fresh perspective, unique Gen-AI approach | Multi-agent architecture, satellite NDVI + mandi price fusion, 5-tier connectivity degradation — combines Earth Engine + voice-first + agriculture |
+| **Technical Implementation** | Code quality, Gen-AI use, scalability, soundness | Gemini 2.5 orchestration, Vertex AI Agent Builder, Cloud STT/TTS for Hindi voice, Earth Engine API for NDVI, real AgMarkNet + OpenWeatherMap integrations, Firestore for state |
+| **Practical Impact** | Real-world problem, significant potential impact | 150M+ Indian farmers, 30% income increase (₹34,000/year per farmer), post-harvest loss reduction, mandi price arbitrage — backed with specific math |
+| **User Experience** | Ease of use, interface, accessibility | Voice-first on any ₹500 feature phone via 2G — zero smartphone/internet/literacy requirement. Web dashboard for demo. Hindi interaction. SMS fallback. 60-second onboarding |
+| **Pitch Quality** | Presentation clarity, demo quality, value proposition | 3-min demo: live voice call → satellite analysis → mandi recommendation → all 5 agents visible. Clear impact numbers. "One farmer's story" narrative |
 
 ---
 
