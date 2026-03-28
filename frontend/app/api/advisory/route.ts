@@ -8,6 +8,7 @@ const BACKEND_URL =
   process.env.BACKEND_URL ||
   "http://localhost:8080";
 
+// Demo mode is OFF by default. Only enable for offline testing.
 const DEMO_MODE = process.env.DEMO_MODE === "true";
 
 /* ------------------------------------------------------------------ */

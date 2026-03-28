@@ -29,13 +29,15 @@ load_dotenv(dotenv_path=env_path)
 
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 AGMARKNET_API_KEY = os.getenv("AGMARKNET_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyAl580uOrGBdneTgAMcedCwp-40e_dTcws")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "lmsforshantithakur")
 
 if not GOOGLE_MAPS_API_KEY:
     raise RuntimeError("GOOGLE_MAPS_API_KEY not set")
 if not AGMARKNET_API_KEY:
     raise RuntimeError("AGMARKNET_API_KEY not set")
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY not set")
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("kisanmind")
@@ -47,13 +49,29 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 # FastAPI app
 # ---------------------------------------------------------------------------
 app = FastAPI(title="KisanMind API", version="1.0.0")
+
+# Security: restrict CORS to known frontends only
+ALLOWED_ORIGINS = [
+    "https://kisanmind-409924770511.asia-south1.run.app",
+    "https://kisanmind.dmj.one",
+    "http://localhost:3000",
+    "http://localhost:8080",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+    expose_headers=["*"],
+    max_age=600,
 )
+
+
+@app.get("/")
+async def root():
+    return {"service": "KisanMind API", "version": "1.0.0", "status": "live"}
 
 # ---------------------------------------------------------------------------
 # Language helpers
@@ -433,34 +451,35 @@ async def advisory(req: AdvisoryRequest):
 
 
 async def _run_advisory(req: AdvisoryRequest):
-    # 1. Reverse geocode
-    location = await reverse_geocode(req.latitude, req.longitude)
+    # 1. Geocode + weather in PARALLEL (both only need lat/lon)
+    location_task = asyncio.create_task(reverse_geocode(req.latitude, req.longitude))
+    weather_task = asyncio.create_task(fetch_weather(req.latitude, req.longitude))
+
+    location = await location_task
     log.info(f"Location: {location}")
 
-    # 2. Fetch mandi prices
+    # 2. Mandi prices (needs state from geocode)
     mandis = await fetch_mandi_prices(req.crop, location["state"])
     log.info(f"Found {len(mandis)} mandis with prices")
 
-    # 3. Get distances for each mandi
-    mandis = await get_distances(req.latitude, req.longitude, mandis)
+    # 3. Distances + wait for weather in PARALLEL
+    distances_task = asyncio.create_task(get_distances(req.latitude, req.longitude, mandis))
+    weather = await weather_task
+    mandis = await distances_task
 
-    # 4. Calculate net profits
+    # 4. Calculate net profits (pure computation, instant)
     mandis = calculate_net_profits(mandis)
 
-    # 5. Find best mandi (highest net profit) and local/closest mandi
+    # 5. Find best mandi and local/closest mandi
     mandis_with_profit = [m for m in mandis if m.get("net_profit_per_quintal") is not None]
     if mandis_with_profit:
         best_mandi = max(mandis_with_profit, key=lambda m: m["net_profit_per_quintal"])
         local_mandi = min(mandis_with_profit, key=lambda m: m["distance_km"])
     else:
-        # Fallback: sort by modal_price if distances failed
         best_mandi = max(mandis, key=lambda m: m["modal_price"])
         local_mandi = mandis[0] if mandis else None
 
-    # 6. Fetch weather
-    weather = await fetch_weather(req.latitude, req.longitude)
-
-    # 7. Generate advisory via Gemini
+    # 6. Generate advisory via Gemini
     advisory_text = await generate_advisory_with_gemini(
         language=req.language,
         location_name=location["location_name"],
