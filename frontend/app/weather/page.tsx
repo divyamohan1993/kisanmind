@@ -1,32 +1,153 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import WeatherTimeline from "../components/WeatherTimeline";
 import AdvisoryCard from "../components/AdvisoryCard";
+import useGeolocation from "../hooks/useGeolocation";
+import { AlertCircle } from "lucide-react";
 
 import type { ForecastDay } from "../components/WeatherTimeline";
+import type { Advisory } from "../components/AdvisoryCard";
 
-const FORECAST: ForecastDay[] = [
-  { day: "Today", date: "Mar 28", icon: "sun", tempHigh: 28, tempLow: 15, humidity: 65, rainProb: 5, windSpeed: 8 },
-  { day: "Tomorrow", date: "Mar 29", icon: "cloud", tempHigh: 26, tempLow: 14, humidity: 72, rainProb: 20, windSpeed: 10 },
-  { day: "Day 3", date: "Mar 30", icon: "rain", tempHigh: 22, tempLow: 13, humidity: 88, rainProb: 85, windSpeed: 15, alert: "Heavy rain — harvest ripe tomatoes!" },
-  { day: "Day 4", date: "Mar 31", icon: "rain", tempHigh: 20, tempLow: 12, humidity: 85, rainProb: 70, windSpeed: 12, alert: "Do not spray pesticides" },
-  { day: "Day 5", date: "Apr 1", icon: "cloud", tempHigh: 25, tempLow: 14, humidity: 68, rainProb: 15, windSpeed: 7 },
-];
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
-const ADVISORIES = [
-  { type: "do" as const, title: "Harvest ripe tomatoes tomorrow morning", description: "15mm rain forecast on Day 3 can cause fruit cracking and spoilage. Pick all harvest-ready tomatoes before rain arrives.", urgency: "high" as const },
-  { type: "dont" as const, title: "Do not spray any chemicals today or tomorrow", description: "Rain in 48 hours will wash off sprayed chemicals, wasting money and contaminating soil runoff.", urgency: "high" as const },
-  { type: "dont" as const, title: "Skip irrigation today and tomorrow", description: "23mm total rain forecast over Days 3-4 will provide sufficient moisture for tomato plants.", urgency: "medium" as const },
-  { type: "warning" as const, title: "Clear drainage channels before Day 3", description: "Waterlogged soil can cause root rot in tomato plants. Ensure proper drainage before heavy rain.", urgency: "medium" as const },
-  { type: "do" as const, title: "Check fruit for cracking after Day 5", description: "Heavy rain followed by sun causes tomato fruit to crack, reducing market value by 30-40%.", urgency: "low" as const },
-  { type: "do" as const, title: "Good spray window after Day 5", description: "3+ dry days after Day 5 provides good conditions for any needed pesticide application. Consult local KVK.", urgency: "low" as const },
-];
+interface ApiResponse {
+  crop?: string;
+  location?: { location_name?: string; state?: string };
+  weather?: {
+    daily_forecast?: Array<{
+      date: string;
+      max_temp_c: number;
+      min_temp_c: number;
+      precipitation_mm: number;
+      condition?: string;
+      humidity?: number;
+      wind_kph?: number;
+    }>;
+    summary?: string;
+  };
+  advisory?: string;
+  error?: string;
+}
 
 const CROPS = ["Tomato", "Wheat", "Rice", "Apple", "Coffee"];
 
 export default function WeatherPage() {
+  const geo = useGeolocation();
   const [crop, setCrop] = useState("Tomato");
+  const [apiData, setApiData] = useState<ApiResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const body: Record<string, unknown> = {
+        location: "Solan",
+        crop,
+        intent: "weather advisory",
+        language: "hi-IN",
+      };
+      if (geo.latitude && geo.longitude) {
+        body.latitude = geo.latitude;
+        body.longitude = geo.longitude;
+      }
+
+      const res = await fetch(`${API_BASE}/api/advisory`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `Request failed (${res.status})`);
+      }
+
+      const result: ApiResponse = await res.json();
+      if (result.error) throw new Error(result.error);
+      setApiData(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch weather data");
+    }
+    setIsLoading(false);
+  }, [crop, geo.latitude, geo.longitude]);
+
+  useEffect(() => {
+    if (!geo.loading) {
+      fetchData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geo.loading, crop]);
+
+  // Map API weather to ForecastDay[]
+  const forecast: ForecastDay[] = (apiData?.weather?.daily_forecast || []).map(
+    (d, i) => {
+      const dayLabels = ["Today", "Tomorrow", "Day 3", "Day 4", "Day 5"];
+      const cond = (d.condition || "").toLowerCase();
+      const icon: ForecastDay["icon"] = cond.includes("rain")
+        ? "rain"
+        : cond.includes("cloud") || cond.includes("partly") || cond.includes("overcast")
+        ? "cloud"
+        : cond.includes("snow")
+        ? "snow"
+        : "sun";
+      return {
+        day: dayLabels[i] || `Day ${i + 1}`,
+        date: d.date,
+        icon,
+        tempHigh: d.max_temp_c,
+        tempLow: d.min_temp_c,
+        humidity: d.humidity ?? 50,
+        rain_mm: d.precipitation_mm,
+        windSpeed: d.wind_kph ?? 0,
+        condition: d.condition,
+        alert:
+          d.precipitation_mm > 10
+            ? `Heavy rain (${d.precipitation_mm}mm) -- protect crops!`
+            : undefined,
+      };
+    }
+  );
+
+  // Derive weather summary stats
+  const allTempsHigh = forecast.map((f) => f.tempHigh ?? 0);
+  const allTempsLow = forecast.map((f) => f.tempLow ?? 0);
+  const totalRain = forecast.reduce((sum, f) => sum + (f.rain_mm ?? 0), 0);
+  const allHumidity = forecast.map((f) => f.humidity);
+  const allWind = forecast.map((f) => f.windSpeed ?? 0);
+  const tempMin = allTempsLow.length ? Math.min(...allTempsLow) : 0;
+  const tempMax = allTempsHigh.length ? Math.max(...allTempsHigh) : 0;
+  const humidityMin = allHumidity.length ? Math.min(...allHumidity) : 0;
+  const humidityMax = allHumidity.length ? Math.max(...allHumidity) : 0;
+  const windMin = allWind.length ? Math.min(...allWind) : 0;
+  const windMax = allWind.length ? Math.max(...allWind) : 0;
+
+  // Parse advisory text into action items
+  const advisories: Advisory[] = [];
+  if (apiData?.advisory) {
+    const sentences = apiData.advisory.split(/[.।]+/).filter((s) => s.trim().length > 10);
+    for (const s of sentences.slice(0, 6)) {
+      const lower = s.toLowerCase();
+      const isDont =
+        lower.includes("do not") || lower.includes("avoid") || lower.includes("don't") ||
+        lower.includes("mat ") || lower.includes("na ") || lower.includes("nahi") || lower.includes("skip");
+      const isWarning =
+        lower.includes("risk") || lower.includes("warn") || lower.includes("alert") ||
+        lower.includes("khatr") || lower.includes("savdhan") || lower.includes("drain");
+      advisories.push({
+        type: isDont ? "dont" : isWarning ? "warning" : "do",
+        title: s.trim().slice(0, 80),
+        description: s.trim(),
+        urgency: isDont || isWarning ? "high" : "medium",
+      });
+    }
+  }
+
+  const locationLabel = apiData?.location
+    ? `${apiData.location.location_name || "Unknown"}, ${apiData.location.state || ""}`
+    : "Loading...";
 
   return (
     <div className="min-h-screen text-white">
@@ -35,54 +156,98 @@ export default function WeatherPage() {
         <div className="flex items-center justify-between flex-wrap gap-4">
           <div>
             <h2 className="text-3xl font-bold">Weather Advisory</h2>
-            <p className="text-white/50 mt-1">Solan, Himachal Pradesh — 5-day forecast</p>
+            <p className="text-white/50 mt-1">{locationLabel} — 5-day forecast</p>
           </div>
           <select
             value={crop}
             onChange={(e) => setCrop(e.target.value)}
             className="bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
           >
-            {CROPS.map(c => <option key={c} value={c} className="bg-gray-900">{c}</option>)}
+            {CROPS.map((c) => (
+              <option key={c} value={c} className="bg-gray-900">
+                {c}
+              </option>
+            ))}
           </select>
         </div>
 
+        {/* Error Banner */}
+        {error && (
+          <div className="flex items-center gap-3 rounded-xl border border-stressed/30 bg-stressed/10 px-4 py-3 text-sm text-stressed">
+            <AlertCircle size={18} />
+            <span>{error}</span>
+            <button
+              onClick={fetchData}
+              className="ml-auto rounded-lg bg-stressed/20 px-3 py-1 text-xs font-medium hover:bg-stressed/30"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         {/* Weather Summary Banner */}
-        <div className="bg-gradient-to-r from-sky-500/20 to-blue-600/20 border border-sky-500/30 rounded-2xl p-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div>
-              <p className="text-white/50 text-xs uppercase tracking-wider">Temperature</p>
-              <p className="text-2xl font-bold">15° — 28°C</p>
-            </div>
-            <div>
-              <p className="text-white/50 text-xs uppercase tracking-wider">Rain Expected</p>
-              <p className="text-2xl font-bold text-sky-400">23mm</p>
-              <p className="text-xs text-white/40">Days 3-4</p>
-            </div>
-            <div>
-              <p className="text-white/50 text-xs uppercase tracking-wider">Humidity</p>
-              <p className="text-2xl font-bold">65-88%</p>
-            </div>
-            <div>
-              <p className="text-white/50 text-xs uppercase tracking-wider">Wind</p>
-              <p className="text-2xl font-bold">7-15 km/h</p>
+        {isLoading ? (
+          <div className="h-28 rounded-2xl shimmer" />
+        ) : forecast.length > 0 ? (
+          <div className="bg-gradient-to-r from-sky-500/20 to-blue-600/20 border border-sky-500/30 rounded-2xl p-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <p className="text-white/50 text-xs uppercase tracking-wider">Temperature</p>
+                <p className="text-2xl font-bold">{tempMin}° — {tempMax}°C</p>
+              </div>
+              <div>
+                <p className="text-white/50 text-xs uppercase tracking-wider">Rain Expected</p>
+                <p className="text-2xl font-bold text-sky-400">{totalRain.toFixed(0)}mm</p>
+                {apiData?.weather?.summary && (
+                  <p className="text-xs text-white/40">{apiData.weather.summary}</p>
+                )}
+              </div>
+              <div>
+                <p className="text-white/50 text-xs uppercase tracking-wider">Humidity</p>
+                <p className="text-2xl font-bold">{humidityMin}-{humidityMax}%</p>
+              </div>
+              <div>
+                <p className="text-white/50 text-xs uppercase tracking-wider">Wind</p>
+                <p className="text-2xl font-bold">{windMin}-{windMax} km/h</p>
+              </div>
             </div>
           </div>
-        </div>
+        ) : null}
 
         {/* 5-Day Forecast Timeline */}
         <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
           <h3 className="text-xl font-semibold mb-4">5-Day Forecast</h3>
-          <WeatherTimeline forecast={FORECAST} />
+          {isLoading ? (
+            <div className="flex gap-3">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className="min-w-[150px] h-48 rounded-xl shimmer" />
+              ))}
+            </div>
+          ) : forecast.length > 0 ? (
+            <WeatherTimeline forecast={forecast} />
+          ) : (
+            <p className="text-white/40 text-sm">No forecast data available.</p>
+          )}
         </div>
 
         {/* Farming Advisories */}
         <div>
           <h3 className="text-xl font-semibold mb-4">Farming Actions for {crop}</h3>
-          <div className="grid gap-4 md:grid-cols-2">
-            {ADVISORIES.map((a, i) => (
-              <AdvisoryCard key={i} type={a.type} title={a.title} description={a.description} urgency={a.urgency} />
-            ))}
-          </div>
+          {isLoading ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className="h-24 rounded-xl shimmer" />
+              ))}
+            </div>
+          ) : advisories.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              {advisories.map((a, i) => (
+                <AdvisoryCard key={i} type={a.type} title={a.title} description={a.description} urgency={a.urgency} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-white/40 text-sm">No advisories available.</p>
+          )}
         </div>
 
         {/* Crop-Weather Thresholds */}

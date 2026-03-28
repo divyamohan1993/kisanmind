@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Satellite,
   TrendingUp,
@@ -8,6 +8,7 @@ import {
   Store,
   Leaf,
   Search,
+  AlertCircle,
 } from "lucide-react";
 import SatelliteMap from "./components/SatelliteMap";
 import NDVIChart from "./components/NDVIChart";
@@ -16,95 +17,197 @@ import VoiceInput from "./components/VoiceInput";
 import WeatherTimeline from "./components/WeatherTimeline";
 import AdvisoryCard from "./components/AdvisoryCard";
 import type { Advisory } from "./components/AdvisoryCard";
+import type { ForecastDay } from "./components/WeatherTimeline";
+import useGeolocation from "./hooks/useGeolocation";
 
-// Default demo data so the page works standalone
-const DEFAULT_DATA = {
-  location: "Solan, Himachal Pradesh",
-  crop: "Tomato",
-  satellite: { ndvi: 0.72, status: "healthy" as const, trend: "stable" },
-  mandi: { bestMandi: "Shimla", bestPrice: 2400 },
-  weather: { current: { temp: 28, humidity: 45, condition: "sunny" } },
-  advisories: [
-    {
-      type: "do" as const,
-      title: "Harvest tomatoes tomorrow",
-      description:
-        "Heavy rain forecast for Sunday. Harvest ripe tomatoes by Saturday evening to prevent damage.",
-      urgency: "high" as const,
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+
+interface ApiResponse {
+  location?: { location_name?: string; state?: string };
+  crop?: string;
+  mandi_prices?: Array<{
+    market: string;
+    modal_price: number;
+    distance_km: number;
+    net_profit_per_quintal: number;
+    transport_cost_per_quintal?: number;
+    commission_per_quintal?: number;
+  }>;
+  best_mandi?: { market: string; modal_price: number; distance_km: number; net_profit_per_quintal?: number };
+  local_mandi?: { market: string; modal_price: number };
+  weather?: {
+    daily_forecast?: Array<{
+      date: string;
+      max_temp_c: number;
+      min_temp_c: number;
+      precipitation_mm: number;
+      condition?: string;
+      humidity?: number;
+      wind_kph?: number;
+    }>;
+    summary?: string;
+  };
+  advisory?: string;
+  sources?: Record<string, unknown>;
+  error?: string;
+}
+
+function mapApiToState(api: ApiResponse) {
+  const locationName = api.location
+    ? `${api.location.location_name || "Unknown"}, ${api.location.state || ""}`
+    : "Unknown";
+
+  // Build satellite data from advisory text (extract NDVI if mentioned)
+  const ndviMatch = api.advisory?.match(/NDVI[:\s]*([0-9.]+)/i);
+  const ndviValue = ndviMatch ? parseFloat(ndviMatch[1]) : 0.65;
+  const ndviStatus: "healthy" | "moderate" | "stressed" =
+    ndviValue >= 0.6 ? "healthy" : ndviValue >= 0.3 ? "moderate" : "stressed";
+
+  // Map mandi data
+  const bestMandi = api.best_mandi;
+  const mandiChartData = (api.mandi_prices || []).map((m) => ({
+    name: m.market,
+    netProfit: m.net_profit_per_quintal || 0,
+    price: m.modal_price,
+    transport: m.transport_cost_per_quintal || 0,
+    commission: m.commission_per_quintal || 0,
+    distance: m.distance_km,
+  }));
+
+  // Map weather forecast
+  const forecastDays: ForecastDay[] = (api.weather?.daily_forecast || []).map(
+    (d, i) => {
+      const dayLabels = ["Today", "Tomorrow", "Day 3", "Day 4", "Day 5"];
+      const cond = (d.condition || "").toLowerCase();
+      const icon: ForecastDay["icon"] = cond.includes("rain")
+        ? "rain"
+        : cond.includes("cloud") || cond.includes("partly") || cond.includes("overcast")
+        ? "cloud"
+        : cond.includes("snow")
+        ? "snow"
+        : "sun";
+      return {
+        day: dayLabels[i] || `Day ${i + 1}`,
+        date: d.date,
+        icon,
+        tempHigh: d.max_temp_c,
+        tempLow: d.min_temp_c,
+        humidity: d.humidity ?? 50,
+        rain_mm: d.precipitation_mm,
+        windSpeed: d.wind_kph ?? 0,
+        condition: d.condition,
+      };
+    }
+  );
+
+  // Get current weather from first forecast day
+  const today = api.weather?.daily_forecast?.[0];
+  const currentWeather = today
+    ? {
+        temp: today.max_temp_c,
+        humidity: today.humidity ?? 50,
+        condition: today.condition || "Clear",
+      }
+    : { temp: 0, humidity: 0, condition: "--" };
+
+  // Parse advisory into action items
+  const advisories: Advisory[] = [];
+  if (api.advisory) {
+    // Simple heuristic: split advisory into sentences and classify
+    const sentences = api.advisory.split(/[.।]+/).filter((s) => s.trim().length > 10);
+    for (const s of sentences.slice(0, 4)) {
+      const lower = s.toLowerCase();
+      const isDont = lower.includes("do not") || lower.includes("avoid") || lower.includes("mat") || lower.includes("na ") || lower.includes("don't") || lower.includes("nahi");
+      const isWarning = lower.includes("risk") || lower.includes("warn") || lower.includes("alert") || lower.includes("khatr") || lower.includes("savdhan");
+      advisories.push({
+        type: isDont ? "dont" : isWarning ? "warning" : "do",
+        title: s.trim().slice(0, 80),
+        description: s.trim(),
+        urgency: isDont || isWarning ? "high" : "medium",
+      });
+    }
+  }
+
+  return {
+    location: locationName,
+    crop: api.crop || "Tomato",
+    satellite: { ndvi: ndviValue, status: ndviStatus, trend: "stable" as const },
+    mandi: {
+      bestMandi: bestMandi?.market || "N/A",
+      bestPrice: bestMandi?.modal_price || 0,
     },
-    {
-      type: "do" as const,
-      title: "Sell at Shimla mandi",
-      description:
-        "Best net profit of Rs 2,040/quintal at Shimla vs Rs 1,560 at local Solan mandi.",
-      urgency: "medium" as const,
-    },
-    {
-      type: "dont" as const,
-      title: "Do not spray pesticides this week",
-      description:
-        "Rain on Sunday-Monday will wash away any spray. Wait until Tuesday.",
-      urgency: "high" as const,
-    },
-    {
-      type: "warning" as const,
-      title: "Late blight risk increasing",
-      description:
-        "High humidity combined with rain creates ideal conditions for late blight. Apply Mancozeb after rains.",
-      urgency: "medium" as const,
-    },
-  ] as Advisory[],
-  combinedAdvisory:
-    "किसान भाई, आपकी टमाटर की फसल स्वस्थ है (NDVI: 0.72)। रविवार को भारी बारिश की संभावना है, इसलिए कल तक पके टमाटर काट लें। शिमला मंडी में ₹2,400/क्विंटल का भाव मिल रहा है जो सबसे अच्छा है। इस हफ्ते छिड़काव न करें।",
-  combinedAdvisoryEn:
-    "Your tomato crop is healthy (NDVI: 0.72). Heavy rain expected Sunday - harvest by tomorrow. Shimla mandi offers the best price at Rs 2,400/quintal. Do not spray this week.",
-};
+    weather: { current: currentWeather },
+    advisories,
+    combinedAdvisory: api.advisory || "",
+    combinedAdvisoryEn: api.advisory || "",
+    mandiChartData,
+    forecastDays,
+  };
+}
 
 export default function Dashboard() {
-  const [data, setData] = useState(DEFAULT_DATA);
+  const geo = useGeolocation();
+  const [data, setData] = useState<ReturnType<typeof mapApiToState> | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [searchLocation, setSearchLocation] = useState("");
   const [searchCrop, setSearchCrop] = useState("");
   const [showEnglish, setShowEnglish] = useState(false);
+  const [hasFetched, setHasFetched] = useState(false);
 
   const fetchAdvisory = useCallback(
     async (text?: string, language?: string) => {
       setIsLoading(true);
+      setError(null);
       try {
-        const res = await fetch("/api/advisory", {
+        const body: Record<string, unknown> = {
+          location: searchLocation || "Solan",
+          crop: searchCrop || "Tomato",
+          intent: text || "full advisory",
+          language: language || "hi-IN",
+        };
+        if (geo.latitude && geo.longitude) {
+          body.latitude = geo.latitude;
+          body.longitude = geo.longitude;
+        }
+
+        const res = await fetch(`${API_BASE}/api/advisory`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: searchLocation || "Solan",
-            crop: searchCrop || "Tomato",
-            intent: text || "full advisory",
-            language: language || "hi-IN",
-          }),
+          body: JSON.stringify(body),
         });
-        const result = await res.json();
-        setData({
-          ...DEFAULT_DATA,
-          ...result,
-          satellite: { ...DEFAULT_DATA.satellite, ...result.satellite },
-          mandi: { ...DEFAULT_DATA.mandi, ...result.mandi },
-          weather: { ...DEFAULT_DATA.weather, ...result.weather },
-          advisories: result.advisories || DEFAULT_DATA.advisories,
-          combinedAdvisory:
-            result.combinedAdvisory || DEFAULT_DATA.combinedAdvisory,
-          combinedAdvisoryEn:
-            result.combinedAdvisoryEn || DEFAULT_DATA.combinedAdvisoryEn,
-        });
-      } catch {
-        // Keep demo data on error
+
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody.error || `Request failed (${res.status})`);
+        }
+
+        const result: ApiResponse = await res.json();
+        if (result.error) {
+          throw new Error(result.error);
+        }
+
+        setData(mapApiToState(result));
+        setHasFetched(true);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to fetch advisory");
       }
       setIsLoading(false);
     },
-    [searchLocation, searchCrop]
+    [searchLocation, searchCrop, geo.latitude, geo.longitude]
   );
+
+  // Auto-fetch on first load once geo is ready
+  useEffect(() => {
+    if (!geo.loading && !hasFetched && !isLoading) {
+      fetchAdvisory();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geo.loading]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
-      {/* Voice-First Banner — most prominent element */}
+      {/* Voice-First Banner */}
       <a
         href="/talk"
         className="group mb-8 flex items-center gap-4 rounded-2xl border-2 border-healthy/30 bg-gradient-to-r from-healthy/10 via-healthy/5 to-transparent p-5 sm:p-6 transition-all hover:border-healthy/50 hover:shadow-[0_0_40px_rgba(34,197,94,0.15)] active:scale-[0.99]"
@@ -141,7 +244,7 @@ export default function Dashboard() {
           </div>
           <div className="flex items-center gap-2 text-xs text-white/40">
             <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-healthy" />
-            Live Data -- {data.location}
+            {data ? `Live Data -- ${data.location}` : "Loading..."}
           </div>
         </div>
 
@@ -187,12 +290,30 @@ export default function Dashboard() {
           </button>
         </div>
 
-        {/* Satellite View */}
-        <SatelliteMap
-          location={data.location}
-          ndvi={data.satellite.ndvi}
-          status={data.satellite.status}
-        />
+        {/* Error Banner */}
+        {error && (
+          <div className="mb-6 flex items-center gap-3 rounded-xl border border-stressed/30 bg-stressed/10 px-4 py-3 text-sm text-stressed">
+            <AlertCircle size={18} />
+            <span>{error}</span>
+            <button
+              onClick={() => fetchAdvisory()}
+              className="ml-auto rounded-lg bg-stressed/20 px-3 py-1 text-xs font-medium hover:bg-stressed/30"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Loading skeleton for satellite view */}
+        {isLoading && !data ? (
+          <div className="relative overflow-hidden rounded-2xl border border-white/5 h-64 sm:h-80 lg:h-96 shimmer" />
+        ) : (
+          <SatelliteMap
+            location={data?.location || "Loading..."}
+            ndvi={data?.satellite.ndvi ?? 0}
+            status={data?.satellite.status ?? "moderate"}
+          />
+        )}
       </div>
 
       {/* Stat Cards */}
@@ -206,12 +327,18 @@ export default function Dashboard() {
               NDVI Index
             </span>
           </div>
-          <div className="text-3xl font-bold tabular-nums text-healthy">
-            {data.satellite.ndvi.toFixed(2)}
-          </div>
-          <div className="mt-1 text-xs capitalize text-white/50">
-            {data.satellite.status} -- Trend: {data.satellite.trend}
-          </div>
+          {isLoading && !data ? (
+            <div className="h-9 w-20 rounded-lg shimmer" />
+          ) : (
+            <>
+              <div className="text-3xl font-bold tabular-nums text-healthy">
+                {(data?.satellite.ndvi ?? 0).toFixed(2)}
+              </div>
+              <div className="mt-1 text-xs capitalize text-white/50">
+                {data?.satellite.status || "--"} -- Trend: {data?.satellite.trend || "--"}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="glass-card glass-card-hover glow-blue p-5">
@@ -223,13 +350,19 @@ export default function Dashboard() {
               Weather
             </span>
           </div>
-          <div className="text-3xl font-bold tabular-nums text-sky">
-            {data.weather.current.temp}°C
-          </div>
-          <div className="mt-1 text-xs text-white/50">
-            Humidity {data.weather.current.humidity}% --{" "}
-            {data.weather.current.condition}
-          </div>
+          {isLoading && !data ? (
+            <div className="h-9 w-20 rounded-lg shimmer" />
+          ) : (
+            <>
+              <div className="text-3xl font-bold tabular-nums text-sky">
+                {data?.weather.current.temp ?? "--"}°C
+              </div>
+              <div className="mt-1 text-xs text-white/50">
+                Humidity {data?.weather.current.humidity ?? "--"}% --{" "}
+                {data?.weather.current.condition || "--"}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="glass-card glass-card-hover p-5" style={{ boxShadow: "0 0 20px rgba(234,179,8,0.1)" }}>
@@ -241,12 +374,18 @@ export default function Dashboard() {
               Best Mandi
             </span>
           </div>
-          <div className="text-3xl font-bold tabular-nums text-moderate">
-            ₹{data.mandi.bestPrice.toLocaleString()}
-          </div>
-          <div className="mt-1 text-xs text-white/50">
-            {data.mandi.bestMandi} -- per quintal
-          </div>
+          {isLoading && !data ? (
+            <div className="h-9 w-24 rounded-lg shimmer" />
+          ) : (
+            <>
+              <div className="text-3xl font-bold tabular-nums text-moderate">
+                {data?.mandi.bestPrice ? `₹${data.mandi.bestPrice.toLocaleString()}` : "--"}
+              </div>
+              <div className="mt-1 text-xs text-white/50">
+                {data?.mandi.bestMandi || "--"} -- per quintal
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -268,16 +407,27 @@ export default function Dashboard() {
             {showEnglish ? "हिंदी" : "English"}
           </button>
         </div>
-        <p className="text-sm leading-relaxed text-white/70">
-          {showEnglish ? data.combinedAdvisoryEn : data.combinedAdvisory}
-        </p>
+        {isLoading && !data ? (
+          <div className="space-y-2">
+            <div className="h-4 w-full rounded shimmer" />
+            <div className="h-4 w-3/4 rounded shimmer" />
+          </div>
+        ) : (
+          <p className="text-sm leading-relaxed text-white/70">
+            {data?.combinedAdvisory || "Click Analyze to get advisory."}
+          </p>
+        )}
         {isLoading && <div className="mt-3 h-1 w-full shimmer rounded-full" />}
       </div>
 
       {/* Charts Grid */}
       <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
         <NDVIChart />
-        <MandiComparison />
+        {data?.mandiChartData && data.mandiChartData.length > 0 ? (
+          <MandiComparison data={data.mandiChartData} />
+        ) : (
+          <MandiComparison />
+        )}
       </div>
 
       {/* Weather Timeline */}
@@ -285,7 +435,17 @@ export default function Dashboard() {
         <h2 className="mb-4 text-lg font-bold text-white/90">
           5-Day Weather Forecast
         </h2>
-        <WeatherTimeline />
+        {isLoading && !data ? (
+          <div className="flex gap-3">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="min-w-[150px] h-48 rounded-xl shimmer" />
+            ))}
+          </div>
+        ) : data?.forecastDays && data.forecastDays.length > 0 ? (
+          <WeatherTimeline forecast={data.forecastDays} />
+        ) : (
+          <WeatherTimeline />
+        )}
       </div>
 
       {/* Advisory Cards */}
@@ -293,11 +453,21 @@ export default function Dashboard() {
         <h2 className="mb-4 text-lg font-bold text-white/90">
           Action Items
         </h2>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {data.advisories.map((adv, i) => (
-            <AdvisoryCard key={i} {...adv} />
-          ))}
-        </div>
+        {isLoading && !data ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="h-24 rounded-xl shimmer" />
+            ))}
+          </div>
+        ) : data?.advisories && data.advisories.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {data.advisories.map((adv, i) => (
+              <AdvisoryCard key={i} {...adv} />
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-white/40">No action items yet. Click Analyze to get advice.</p>
+        )}
       </div>
     </div>
   );

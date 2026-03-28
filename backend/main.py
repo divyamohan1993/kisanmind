@@ -8,8 +8,12 @@ import json
 import base64
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+import ee
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Form
@@ -45,6 +49,54 @@ log = logging.getLogger("kisanmind")
 
 # Gemini client
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Earth Engine initialization (once at startup)
+EE_PROJECT = "dmjone"
+EE_INITIALIZED = False
+
+def _init_earth_engine():
+    global EE_INITIALIZED
+    _log = logging.getLogger("kisanmind")
+    ee_key_json = os.getenv("EE_SERVICE_KEY_JSON", "")
+    ee_key_path = os.getenv("EE_SERVICE_KEY_PATH", "/secrets/ee-key/ee-service-key")
+
+    # Try service account JSON from env var
+    if ee_key_json:
+        try:
+            from google.oauth2 import service_account as _sa
+            key_data = json.loads(ee_key_json)
+            creds = _sa.Credentials.from_service_account_info(key_data, scopes=["https://www.googleapis.com/auth/earthengine"])
+            ee.Initialize(credentials=creds, project=EE_PROJECT)
+            EE_INITIALIZED = True
+            _log.info(f"Earth Engine initialized with SA JSON (project: {EE_PROJECT})")
+            return
+        except Exception as e:
+            _log.warning(f"EE init with SA JSON failed: {e}")
+
+    # Try key file path
+    if os.path.exists(ee_key_path):
+        try:
+            from google.oauth2 import service_account as _sa
+            creds = _sa.Credentials.from_service_account_file(ee_key_path, scopes=["https://www.googleapis.com/auth/earthengine"])
+            ee.Initialize(credentials=creds, project=EE_PROJECT)
+            EE_INITIALIZED = True
+            _log.info(f"Earth Engine initialized with key file (project: {EE_PROJECT})")
+            return
+        except Exception as e:
+            _log.warning(f"EE init with key file failed: {e}")
+
+    # Fallback: application default credentials
+    try:
+        ee.Initialize(project=EE_PROJECT)
+        EE_INITIALIZED = True
+        _log.info(f"Earth Engine initialized with ADC (project: {EE_PROJECT})")
+    except Exception as e:
+        _log.warning(f"Earth Engine init failed: {e}. NDVI will be unavailable.")
+
+_init_earth_engine()
+
+# Thread pool for blocking EE calls (ee.getInfo() blocks)
+_ee_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ee")
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -125,6 +177,11 @@ class STTRequest(BaseModel):
     audio_base64: str
     language: str = "hi-IN"
     encoding: str = "WEBM_OPUS"
+
+
+class NDVIRequest(BaseModel):
+    latitude: float
+    longitude: float
 
 
 class IntentRequest(BaseModel):
@@ -378,6 +435,7 @@ async def generate_advisory_with_gemini(
     best_mandi: dict,
     local_mandi: Optional[dict],
     weather: dict,
+    ndvi_data: Optional[dict] = None,
 ) -> str:
     """Send all real data to Gemini 2.5 Flash and get a conversational advisory."""
     language_name = LANGUAGE_NAMES.get(language, "Hindi")
@@ -386,6 +444,15 @@ async def generate_advisory_with_gemini(
     local_price = local_mandi["modal_price"] if local_mandi else 0
     best_price = best_mandi["net_profit_per_quintal"] or best_mandi["modal_price"]
     price_advantage = round(best_price - local_price, 2) if local_mandi and local_price else 0
+
+    # Build satellite data section for the prompt
+    if ndvi_data:
+        satellite_section = f"""Satellite Crop Health (Sentinel-2, date: {ndvi_data['image_date']}):
+  NDVI: {ndvi_data['ndvi']} (health: {ndvi_data['health']}, trend: {ndvi_data['trend']})
+  EVI: {ndvi_data['evi']}, NDWI: {ndvi_data['ndwi']}
+  Note: NDVI > 0.6 = healthy, 0.4-0.6 = moderate, < 0.4 = stressed. NDWI < -0.3 = dry soil."""
+    else:
+        satellite_section = "Satellite crop health data: unavailable"
 
     prompt = f"""You are KisanMind, a friendly agricultural advisor talking to an Indian farmer.
 Speak in {language_name} language as if you're their trusted friend/elder.
@@ -400,14 +467,16 @@ Best mandi: {best_mandi['market']} at ₹{best_mandi['modal_price']}/quintal ({b
 Local mandi: {local_mandi_name} at ₹{local_price}/quintal
 Price advantage: ₹{price_advantage}/quintal more at {best_mandi['market']}
 Weather next 5 days: {weather['summary']}
+{satellite_section}
 
 Give the farmer a complete advisory covering:
 1. Where to sell (best mandi with price, distance, net profit)
 2. Weather actions (what to do, what NOT to do)
-3. Any warnings
+3. Satellite crop health assessment (if data available — mention NDVI health status and any concern)
+4. Any warnings
 
-Keep it conversational — like talking to a friend on phone. Under 200 words.
-Add disclaimer: "Yeh data aaj ki AgMarkNet aur mausam report se hai. Final faisla aap ka hai."
+Keep it conversational — like talking to a friend on phone. Under 250 words.
+Add disclaimer: "Yeh data aaj ki AgMarkNet, satellite aur mausam report se hai. Final faisla aap ka hai."
 """
 
     # Use Gemini 3.1 Pro for rich conversational advisory
@@ -416,6 +485,138 @@ Add disclaimer: "Yeh data aaj ki AgMarkNet aur mausam report se hai. Final faisl
         contents=prompt,
     )
     return response.text
+
+
+# ---------------------------------------------------------------------------
+# Earth Engine NDVI helpers
+# ---------------------------------------------------------------------------
+def _compute_ndvi_sync(lat: float, lon: float) -> dict:
+    """Blocking EE computation — runs in a thread pool. Returns NDVI data dict."""
+    point = ee.Geometry.Point([lon, lat])
+    buffer = point.buffer(500)  # 500m buffer
+
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=30)
+
+    # Sentinel-2 SR Harmonized, <30% cloud cover, last 30 days
+    collection = (
+        ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(point)
+        .filterDate(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30))
+        .sort("system:time_start", False)  # newest first
+    )
+
+    count = collection.size().getInfo()
+    if count == 0:
+        # Expand to 90 days if no images in 30 days
+        start_date = end_date - timedelta(days=90)
+        collection = (
+            ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterBounds(point)
+            .filterDate(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30))
+            .sort("system:time_start", False)
+        )
+        count = collection.size().getInfo()
+        if count == 0:
+            return {"error": "No cloud-free Sentinel-2 imagery available for this location"}
+
+    # Get the most recent image
+    latest = ee.Image(collection.first())
+
+    # Compute indices (Sentinel-2 bands: B4=Red, B8=NIR, B3=Green, B11=SWIR)
+    ndvi = latest.normalizedDifference(["B8", "B4"]).rename("NDVI")
+    evi = latest.expression(
+        "2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))",
+        {
+            "NIR": latest.select("B8"),
+            "RED": latest.select("B4"),
+            "BLUE": latest.select("B2"),
+        },
+    ).rename("EVI")
+    ndwi = latest.normalizedDifference(["B3", "B8"]).rename("NDWI")
+
+    # Compute mean over the buffer area
+    stats = ndvi.addBands(evi).addBands(ndwi).reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=buffer,
+        scale=10,
+        maxPixels=1e6,
+    ).getInfo()
+
+    ndvi_val = stats.get("NDVI")
+    evi_val = stats.get("EVI")
+    ndwi_val = stats.get("NDWI")
+
+    # Get image date
+    image_date_ms = latest.get("system:time_start").getInfo()
+    image_date = datetime.utcfromtimestamp(image_date_ms / 1000).strftime("%Y-%m-%d")
+
+    # Compute trend using two most recent images
+    trend = "unknown"
+    if count >= 2:
+        try:
+            images_list = collection.toList(2)
+            older = ee.Image(images_list.get(1))
+            older_ndvi = older.normalizedDifference(["B8", "B4"]).rename("NDVI")
+            older_stats = older_ndvi.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=buffer,
+                scale=10,
+                maxPixels=1e6,
+            ).getInfo()
+            older_ndvi_val = older_stats.get("NDVI")
+            if ndvi_val is not None and older_ndvi_val is not None:
+                diff = ndvi_val - older_ndvi_val
+                if diff > 0.05:
+                    trend = "improving"
+                elif diff < -0.05:
+                    trend = "declining"
+                else:
+                    trend = "stable"
+        except Exception:
+            trend = "unknown"
+
+    # Classify health
+    if ndvi_val is None:
+        health = "Unknown"
+    elif ndvi_val >= 0.6:
+        health = "Healthy"
+    elif ndvi_val >= 0.4:
+        health = "Moderate"
+    elif ndvi_val >= 0.2:
+        health = "Stressed"
+    else:
+        health = "Bare/Very Stressed"
+
+    return {
+        "ndvi": round(ndvi_val, 4) if ndvi_val is not None else None,
+        "evi": round(evi_val, 4) if evi_val is not None else None,
+        "ndwi": round(ndwi_val, 4) if ndwi_val is not None else None,
+        "trend": trend,
+        "health": health,
+        "image_date": image_date,
+        "images_found": count,
+        "source": f"Sentinel-2 via Google Earth Engine (project: {EE_PROJECT})",
+    }
+
+
+async def fetch_ndvi(lat: float, lon: float) -> Optional[dict]:
+    """Fetch NDVI data from Earth Engine, returning None on failure."""
+    if not EE_INITIALIZED:
+        log.warning("Earth Engine not initialized — skipping NDVI")
+        return None
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(_ee_executor, _compute_ndvi_sync, lat, lon)
+        if "error" in result:
+            log.warning(f"NDVI computation returned error: {result['error']}")
+            return None
+        return result
+    except Exception as e:
+        log.error(f"NDVI fetch failed: {e}", exc_info=True)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -432,8 +633,21 @@ async def health():
             "agmarknet": bool(AGMARKNET_API_KEY),
             "gemini": bool(GEMINI_API_KEY),
             "weather": "Open-Meteo (free)",
+            "earth_engine": f"{'active' if EE_INITIALIZED else 'unavailable'} (project: {EE_PROJECT})",
         },
     }
+
+
+@app.post("/api/ndvi")
+async def get_ndvi(req: NDVIRequest):
+    """Get satellite vegetation indices (NDVI, EVI, NDWI) from Google Earth Engine."""
+    if not EE_INITIALIZED:
+        raise HTTPException(503, "Earth Engine is not initialized. Satellite data unavailable.")
+    log.info(f"NDVI request: lat={req.latitude}, lon={req.longitude}")
+    result = await fetch_ndvi(req.latitude, req.longitude)
+    if result is None:
+        raise HTTPException(404, "No satellite data available for this location. Try a different area or check back later.")
+    return result
 
 
 @app.post("/api/advisory")
@@ -471,9 +685,10 @@ async def _run_advisory(req: AdvisoryRequest):
             crop = "Tomato"
         log.info(f"Auto-detected crop: {crop}")
 
-    # 1. Geocode + weather in PARALLEL (both only need lat/lon)
+    # 1. Geocode + weather + NDVI in PARALLEL (all only need lat/lon)
     location_task = asyncio.create_task(reverse_geocode(req.latitude, req.longitude))
     weather_task = asyncio.create_task(fetch_weather(req.latitude, req.longitude))
+    ndvi_task = asyncio.create_task(fetch_ndvi(req.latitude, req.longitude))
 
     location = await location_task
     log.info(f"Location: {location}")
@@ -482,10 +697,16 @@ async def _run_advisory(req: AdvisoryRequest):
     mandis = await fetch_mandi_prices(crop, location["state"])
     log.info(f"Found {len(mandis)} mandis with prices")
 
-    # 3. Distances + wait for weather in PARALLEL
+    # 3. Distances + wait for weather + NDVI in PARALLEL
     distances_task = asyncio.create_task(get_distances(req.latitude, req.longitude, mandis))
     weather = await weather_task
+    ndvi_data = await ndvi_task
     mandis = await distances_task
+
+    if ndvi_data:
+        log.info(f"NDVI: {ndvi_data['ndvi']}, Health: {ndvi_data['health']}, Trend: {ndvi_data['trend']}")
+    else:
+        log.info("NDVI data unavailable — advisory will proceed without satellite data")
 
     # 4. Calculate net profits (pure computation, instant)
     mandis = calculate_net_profits(mandis)
@@ -509,9 +730,10 @@ async def _run_advisory(req: AdvisoryRequest):
         best_mandi=best_mandi,
         local_mandi=local_mandi,
         weather=weather,
+        ndvi_data=ndvi_data,
     )
 
-    return {
+    response_data = {
         "location": location,
         "crop": crop,
         "language": req.language,
@@ -528,6 +750,15 @@ async def _run_advisory(req: AdvisoryRequest):
             "geocoding": "Google Maps Geocoding API",
         },
     }
+
+    if ndvi_data:
+        response_data["satellite"] = ndvi_data
+        response_data["sources"]["satellite"] = f"Sentinel-2 via Google Earth Engine (project: {EE_PROJECT})"
+    else:
+        response_data["satellite"] = None
+        response_data["sources"]["satellite"] = "unavailable"
+
+    return response_data
 
 
 @app.post("/api/tts")
