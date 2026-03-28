@@ -104,6 +104,30 @@ export default function Dashboard() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+      {/* Voice-First Banner — most prominent element */}
+      <a
+        href="/talk"
+        className="group mb-8 flex items-center gap-4 rounded-2xl border-2 border-healthy/30 bg-gradient-to-r from-healthy/10 via-healthy/5 to-transparent p-5 sm:p-6 transition-all hover:border-healthy/50 hover:shadow-[0_0_40px_rgba(34,197,94,0.15)] active:scale-[0.99]"
+      >
+        <div className="flex h-16 w-16 sm:h-20 sm:w-20 shrink-0 items-center justify-center rounded-full bg-healthy/20 text-3xl sm:text-4xl group-hover:bg-healthy/30 transition-colors pulse-ring">
+          🎤
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-xl sm:text-2xl font-bold text-white leading-tight">
+            किसान भाई, यहाँ टैप करें
+          </div>
+          <div className="text-base sm:text-lg text-healthy mt-1">
+            बोलकर सलाह पाएं — Tap here, speak and get advice
+          </div>
+          <div className="text-xs text-white/40 mt-1">
+            Voice-first advisory in 22 Indian languages
+          </div>
+        </div>
+        <div className="hidden sm:flex h-12 w-12 items-center justify-center rounded-full bg-healthy text-kisan-dark text-xl font-bold">
+          →
+        </div>
+      </a>
+
       {/* Hero */}
       <div className="mb-8">
         <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">

@@ -45,6 +45,12 @@ export default function RootLayout({
 
             <nav className="hidden items-center gap-1 md:flex">
               <Link
+                href="/talk"
+                className="rounded-lg bg-healthy/10 border border-healthy/20 px-3 py-2 text-sm font-medium text-healthy transition-colors hover:bg-healthy/20"
+              >
+                🎤 Farmer Mode
+              </Link>
+              <Link
                 href="/"
                 className="rounded-lg px-3 py-2 text-sm text-white/70 transition-colors hover:bg-white/5 hover:text-white"
               >
@@ -65,7 +71,13 @@ export default function RootLayout({
             </nav>
 
             <div className="flex items-center gap-3">
-              <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-white/60">
+              <Link
+                href="/talk"
+                className="md:hidden flex items-center gap-1 rounded-full bg-healthy/20 border border-healthy/30 px-3 py-1.5 text-xs font-medium text-healthy"
+              >
+                🎤 Voice
+              </Link>
+              <span className="hidden sm:inline-flex rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-white/60">
                 🛰️ Live
               </span>
             </div>
