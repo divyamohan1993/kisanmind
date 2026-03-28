@@ -254,56 +254,53 @@ async def reverse_geocode(lat: float, lon: float) -> dict:
 
 
 async def fetch_mandi_prices(crop: str, state: str) -> list[dict]:
-    """Fetch real mandi prices from AgMarkNet / data.gov.in."""
-    url = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
-    params = {
-        "api-key": AGMARKNET_API_KEY,
-        "format": "json",
-        "limit": 20,
-        "filters[commodity]": crop,
-        "filters[state]": state,
-    }
-    headers = {
-        "User-Agent": "KisanMind/1.0 (Agricultural Advisory; contact@dmj.one)",
-        "Accept": "application/json",
-    }
-
+    """Fetch real mandi prices. GCS cache first (fast), direct API as fallback."""
     records = []
-    # Try direct AgMarkNet API first
-    for attempt in range(2):
+    source = "unknown"
+
+    # 1. Try GCS cache first (pre-fetched daily, fast, always works from Cloud Run)
+    crop_lower = crop.lower().replace(" ", "_")
+    gcs_url = f"https://storage.googleapis.com/kisanmind-cache/mandi-prices/agmarknet_{crop_lower}.json"
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(gcs_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                all_records = data.get("records", [])
+                records = [r for r in all_records if r.get("state", "").lower() == state.lower()]
+                if not records:
+                    records = all_records[:20]
+                else:
+                    records = records[:20]
+                source = "GCS cache (AgMarkNet data, refreshed daily)"
+                log.info(f"GCS cache hit: {len(records)} records for {crop}/{state}")
+    except Exception as e:
+        log.warning(f"GCS cache miss: {e}")
+
+    # 2. Fallback: direct AgMarkNet API (may be blocked from Cloud Run IPs)
+    if not records:
+        url = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
+        params = {
+            "api-key": AGMARKNET_API_KEY,
+            "format": "json",
+            "limit": 20,
+            "filters[commodity]": crop,
+            "filters[state]": state,
+        }
+        headers = {
+            "User-Agent": "KisanMind/1.0 (Agricultural Advisory; contact@dmj.one)",
+            "Accept": "application/json",
+        }
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
                 resp = await client.get(url, params=params, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
                 records = data.get("records", [])
-                if records:
-                    log.info(f"AgMarkNet direct: {len(records)} records")
-                    break
+                source = "AgMarkNet direct API (real-time)"
+                log.info(f"AgMarkNet direct: {len(records)} records")
         except Exception as e:
-            log.warning(f"AgMarkNet direct attempt {attempt+1} failed: {e}")
-            await asyncio.sleep(0.5)
-
-    # Fallback: read from GCS cache (pre-fetched, publicly accessible)
-    if not records:
-        crop_lower = crop.lower().replace(" ", "_")
-        gcs_url = f"https://storage.googleapis.com/kisanmind-cache/mandi-prices/agmarknet_{crop_lower}.json"
-        log.info(f"Falling back to GCS cache: {gcs_url}")
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(gcs_url)
-                resp.raise_for_status()
-                data = resp.json()
-                all_records = data.get("records", [])
-                # Filter by state
-                records = [r for r in all_records if r.get("state", "").lower() == state.lower()]
-                if not records:
-                    records = all_records[:20]  # If no state match, use top 20
-                else:
-                    records = records[:20]
-                log.info(f"GCS cache: {len(records)} records for {state}")
-        except Exception as e:
-            log.error(f"GCS cache also failed: {e}")
+            log.warning(f"AgMarkNet direct failed: {e}")
 
     if not records:
         raise HTTPException(404, f"No mandi prices found for {crop}. Both AgMarkNet and cache unavailable.")
