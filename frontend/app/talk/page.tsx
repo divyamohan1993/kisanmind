@@ -22,18 +22,30 @@ const LANGUAGES = [
   { code: "brx", label: "বোড়ো" }, { code: "mni", label: "मणिपुरी" },
 ];
 
-const GREETINGS: Record<string, string> = {
-  hi: "नमस्ते किसान भाई! मैं किसानमाइंड हूँ, आपका खेती सलाहकार। बताइए, आप कौनसी फसल उगा रहे हैं और कहाँ?",
-  en: "Welcome farmer! I am KisanMind, your agriculture advisor. Tell me which crop you grow and where.",
-  ta: "வணக்கம் விவசாயி! நான் கிசான்மைண்ட். நீங்கள் எந்தப் பயிரை எங்கே பயிரிடுகிறீர்கள் என்று சொல்லுங்கள்.",
-  te: "నమస్కారం రైతు! నేను కిసాన్‌మైండ్. మీరు ఏ పంట ఎక్కడ పండిస్తున్నారో చెప్పండి.",
-  bn: "নমস্কার কৃষক ভাই! আমি কিষাণমাইন্ড। বলুন, আপনি কোন ফসল কোথায় চাষ করছেন?",
-  mr: "नमस्कार शेतकरी बंधू! मी किसानमाइंड. सांगा, तुम्ही कोणतं पीक कुठे घेत आहात?",
-  pa: "ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਕਿਸਾਨ ਵੀਰ! ਮੈਂ ਕਿਸਾਨਮਾਈਂਡ ਹਾਂ। ਦੱਸੋ, ਤੁਸੀਂ ਕਿਹੜੀ ਫਸਲ ਕਿੱਥੇ ਉਗਾ ਰਹੇ ਹੋ?",
-  gu: "નમસ્તે ખેડૂત ભાઈ! હું કિસાનમાઈન્ડ છું. કહો, તમે ક્યાં કઈ ફસલ ઉગાડો છો?",
-  kn: "ನಮಸ್ಕಾರ ರೈತ ಬಂಧು! ನಾನು ಕಿಸಾನ್‌ಮೈಂಡ್. ಹೇಳಿ, ನೀವು ಯಾವ ಬೆಳೆ ಎಲ್ಲಿ ಬೆಳೆಯುತ್ತಿದ್ದೀರಿ?",
-  ml: "നമസ്കാരം കർഷക സഹോദരാ! ഞാൻ കിസാൻമൈൻഡ്. പറയൂ, നിങ്ങൾ ഏത് വിള എവിടെ കൃഷി ചെയ്യുന്നു?",
-};
+// Greetings — GPS handles location automatically, only ask for crop
+function getGreeting(lang: string, hasGps: boolean): string {
+  if (hasGps) {
+    const g: Record<string, string> = {
+      hi: "नमस्ते किसान भाई! मैं किसानमाइंड हूँ, आपका खेती सलाहकार। आपकी लोकेशन मिल गई है। बस बताइए, आप कौनसी फसल उगा रहे हैं?",
+      en: "Welcome farmer! I am KisanMind, your agriculture advisor. I have your location. Just tell me which crop you are growing.",
+      ta: "வணக்கம் விவசாயி! நான் கிசான்மைண்ட். உங்கள் இருப்பிடம் கிடைத்துவிட்டது. நீங்கள் எந்தப் பயிரை பயிரிடுகிறீர்கள் என்று மட்டும் சொல்லுங்கள்.",
+      te: "నమస్కారం రైతు! నేను కిసాన్‌మైండ్. మీ లొకేషన్ దొరికింది. మీరు ఏ పంట పండిస్తున్నారో చెప్పండి.",
+      bn: "নমস্কার কৃষক ভাই! আমি কিষাণমাইন্ড। আপনার লোকেশন পেয়ে গেছি। শুধু বলুন, কোন ফসল চাষ করছেন?",
+      mr: "नमस्कार शेतकरी बंधू! मी किसानमाइंड. तुमची लोकेशन मिळाली. फक्त सांगा, कोणतं पीक घेत आहात?",
+      pa: "ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਕਿਸਾਨ ਵੀਰ! ਮੈਂ ਕਿਸਾਨਮਾਈਂਡ ਹਾਂ। ਤੁਹਾਡੀ ਲੋਕੇਸ਼ਨ ਮਿਲ ਗਈ ਹੈ। ਬੱਸ ਦੱਸੋ, ਕਿਹੜੀ ਫਸਲ ਉਗਾ ਰਹੇ ਹੋ?",
+      gu: "નમસ્તે ખેડૂત ભાઈ! હું કિસાનમાઈન્ડ છું. તમારું લોકેશન મળી ગયું. બસ કહો, કઈ ફસલ ઉગાડો છો?",
+      kn: "ನಮಸ್ಕಾರ ರೈತ ಬಂಧು! ನಾನು ಕಿಸಾನ್‌ಮೈಂಡ್. ನಿಮ್ಮ ಲೊಕೇಶನ್ ಸಿಕ್ಕಿದೆ. ಯಾವ ಬೆಳೆ ಬೆಳೆಯುತ್ತಿದ್ದೀರಿ ಅಷ್ಟೇ ಹೇಳಿ.",
+      ml: "നമസ്കാരം കർഷക സഹോദരാ! ഞാൻ കിസാൻമൈൻഡ്. നിങ്ങളുടെ ലൊക്കേഷൻ കിട്ടി. ഏത് വിള കൃഷി ചെയ്യുന്നു എന്ന് മാത്രം പറയൂ.",
+    };
+    return g[lang] || g["hi"];
+  }
+  // No GPS — ask for both crop and location
+  const g: Record<string, string> = {
+    hi: "नमस्ते किसान भाई! मैं किसानमाइंड हूँ। आपकी लोकेशन नहीं मिल पाई। कृपया बताइए, आप कहाँ हैं और कौनसी फसल उगा रहे हैं?",
+    en: "Welcome farmer! I am KisanMind. I could not detect your location. Please tell me where you are and which crop you are growing.",
+  };
+  return g[lang] || g["hi"];
+}
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -390,10 +402,11 @@ export default function TalkPage() {
     setMessages([]);
     setSummary(null);
 
-    // Greeting
+    // Greeting — adapt based on whether GPS is available
     setCallState("greeting");
     setStatusText(language === "en" ? "Connecting..." : "जोड़ रहे हैं...");
-    const greetText = GREETINGS[language] || GREETINGS["hi"];
+    const hasGps = !!(geo.latitude && geo.longitude);
+    const greetText = getGreeting(language, hasGps);
     addMessage("kisanmind", greetText);
 
     const greetAudio = await playTTS(greetText, language);

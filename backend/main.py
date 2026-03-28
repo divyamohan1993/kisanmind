@@ -519,17 +519,61 @@ End with: "Yeh data aaj ki AgMarkNet, satellite aur mausam report se hai. Final 
         model="gemini-3.1-pro-preview",
         contents=prompt,
     )
-    # Strip ALL markdown formatting — this text will be spoken aloud via TTS
+
     import re
     text = response.text
-    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)  # **bold** → bold
-    text = re.sub(r'\*(.+?)\*', r'\1', text)        # *italic* → italic
-    text = re.sub(r'#{1,6}\s*', '', text)            # ### heading → heading
-    text = re.sub(r'[-•]\s+', '', text)              # bullet points
-    text = re.sub(r'\d+\.\s+', '', text)             # numbered lists
-    text = re.sub(r'`(.+?)`', r'\1', text)           # `code` → code
-    text = re.sub(r'\n{3,}', '\n\n', text)           # collapse excess newlines
-    return text.strip()
+    # Strip ALL markdown formatting — this text will be spoken aloud via TTS
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'#{1,6}\s*', '', text)
+    text = re.sub(r'[-•]\s+', '', text)
+    text = re.sub(r'\d+\.\s+', '', text)
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+
+    # --- Hallucination verification (fast model checks the advisory against source data) ---
+    try:
+        verify_prompt = f"""You are a fact-checker. Compare this advisory against the source data.
+ADVISORY: "{text[:500]}"
+SOURCE DATA:
+- Location: {location_name}, {state}
+- Crop: {crop}
+- Best mandi: {best_mandi['market']} at {best_mandi['modal_price']} Rs/qtl, {best_mandi.get('distance_km','?')} km
+- Local mandi: {local_mandi_name} at {local_price} Rs/qtl
+- Weather: {weather['summary'][:200]}
+
+Check: Are the prices, distances, mandi names, and weather mentioned in the advisory consistent with the source data? Are there any fabricated claims not in the source data?
+Return ONLY one word: "PASS" if accurate, or "FAIL:<brief reason>" if hallucinated."""
+
+        verify_resp = gemini_client.models.generate_content(
+            model="gemini-3.1-flash-lite-preview",
+            contents=verify_prompt,
+        )
+        verdict = verify_resp.text.strip()
+        log.info(f"Hallucination check: {verdict}")
+
+        if verdict.upper().startswith("FAIL"):
+            log.warning(f"Hallucination detected: {verdict}. Regenerating with stricter prompt.")
+            # Regenerate with even stricter instructions
+            strict_prompt = prompt + "\n\nCRITICAL: A fact-checker found errors in your previous response. Be EXTREMELY precise. ONLY use exact numbers from the data above. Do not round or change any value."
+            response2 = gemini_client.models.generate_content(
+                model="gemini-3.1-pro-preview",
+                contents=strict_prompt,
+            )
+            text = response2.text
+            text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+            text = re.sub(r'\*(.+?)\*', r'\1', text)
+            text = re.sub(r'#{1,6}\s*', '', text)
+            text = re.sub(r'[-•]\s+', '', text)
+            text = re.sub(r'\d+\.\s+', '', text)
+            text = re.sub(r'`(.+?)`', r'\1', text)
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            text = text.strip()
+    except Exception as e:
+        log.warning(f"Hallucination check failed (non-critical): {e}")
+
+    return text
 
 
 # ---------------------------------------------------------------------------
