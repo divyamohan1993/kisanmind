@@ -153,6 +153,52 @@ export default function TalkPage() {
     });
   }, []);
 
+  const hasGreeted = useRef(false);
+
+  /* ---- Greet the farmer on first tap ---- */
+  const greetFarmer = useCallback(async () => {
+    const greetings: Record<string, string> = {
+      hi: "नमस्ते किसान भाई! मैं किसानमाइंड हूँ, आपका खेती सलाहकार। बताइए, आप कौनसी फसल उगा रहे हैं और कहाँ? मैं आपको मंडी भाव, मौसम और सही सलाह दूँगा।",
+      en: "Welcome farmer! I am KisanMind, your agriculture advisor. Tell me which crop you grow and where. I will give you mandi prices, weather, and the right advice.",
+      ta: "வணக்கம் விவசாயி! நான் கிசான்மைண்ட், உங்கள் விவசாய ஆலோசகர். நீங்கள் எந்தப் பயிரை எங்கே பயிரிடுகிறீர்கள் என்று சொல்லுங்கள்.",
+      te: "నమస్కారం రైతు! నేను కిసాన్‌మైండ్, మీ వ్యవసాయ సలహాదారుని. మీరు ఏ పంట ఎక్కడ పండిస్తున్నారో చెప్పండి.",
+      bn: "নমস্কার কৃষক ভাই! আমি কিষাণমাইন্ড, আপনার কৃষি পরামর্শদাতা। বলুন, আপনি কোন ফসল কোথায় চাষ করছেন?",
+      mr: "नमस्कार शेतकरी बंधू! मी किसानमाइंड, तुमचा शेती सल्लागार. सांगा, तुम्ही कोणतं पीक कुठे घेत आहात?",
+      pa: "ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਕਿਸਾਨ ਵੀਰ! ਮੈਂ ਕਿਸਾਨਮਾਈਂਡ ਹਾਂ। ਦੱਸੋ, ਤੁਸੀਂ ਕਿਹੜੀ ਫਸਲ ਕਿੱਥੇ ਉਗਾ ਰਹੇ ਹੋ?",
+      gu: "નમસ્તે ખેડૂત ભાઈ! હું કિસાનમાઈન્ડ છું. કહો, તમે ક્યાં કઈ ફસલ ઉગાડો છો?",
+      kn: "ನಮಸ್ಕಾರ ರೈತ ಬಂಧು! ನಾನು ಕಿಸಾನ್‌ಮೈಂಡ್. ಹೇಳಿ, ನೀವು ಯಾವ ಬೆಳೆ ಎಲ್ಲಿ ಬೆಳೆಯುತ್ತಿದ್ದೀರಿ?",
+      ml: "നമസ്കാരം കർഷക സഹോദരാ! ഞാൻ കിസാൻമൈൻഡ്. പറയൂ, നിങ്ങൾ ഏത് വിള എവിടെ കൃഷി ചെയ്യുന്നു?",
+    };
+    const text = greetings[language] || greetings["hi"];
+
+    // Play greeting audio via TTS
+    try {
+      setStage("speaking");
+      setMessages((prev) => [
+        ...prev,
+        { type: "kisanmind", text, language, timestamp: new Date() },
+      ]);
+      const ttsRes = await fetch(`${API_BASE}/api/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, language }),
+      });
+      if (ttsRes.ok) {
+        const ttsData = await ttsRes.json();
+        if (ttsData.audio_base64) {
+          const audio = new Audio(`data:audio/mp3;base64,${ttsData.audio_base64}`);
+          await audio.play();
+          // Wait for audio to finish
+          await new Promise((resolve) => { audio.onended = resolve; });
+        }
+      }
+    } catch (e) {
+      console.warn("Greeting TTS failed:", e);
+    }
+
+    hasGreeted.current = true;
+  }, [language]);
+
   /* ---- Full voice pipeline ---- */
   const handleMicTap = useCallback(async () => {
     if (stage === "recording") {
@@ -289,11 +335,15 @@ export default function TalkPage() {
         setStage("done");
       }
     } else if (stage === "idle" || stage === "done") {
-      // Start recording
+      // Greet on first tap, then start recording
+      if (!hasGreeted.current) {
+        await greetFarmer();
+      }
+      // Start recording after greeting
       await startRecording();
     }
     // If in other stages (transcribing/thinking/speaking), ignore tap
-  }, [stage, stopRecording, startRecording, language, geo.latitude, geo.longitude]);
+  }, [stage, stopRecording, startRecording, greetFarmer, language, geo.latitude, geo.longitude]);
 
   /* ---- Derived UI state ---- */
   const isRecording = stage === "recording";

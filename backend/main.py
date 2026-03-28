@@ -51,21 +51,14 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 # ---------------------------------------------------------------------------
 app = FastAPI(title="KisanMind API", version="1.0.0")
 
-# Security: restrict CORS to known frontends only
-ALLOWED_ORIGINS = [
-    "https://kisanmind-409924770511.asia-south1.run.app",
-    "https://kisanmind.dmj.one",
-    "http://localhost:3000",
-    "http://localhost:8080",
-]
-
+# CORS — allow all origins (Cloud Run error responses drop CORS headers
+# with restricted origins, causing browser failures on 500s)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
-    expose_headers=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
     max_age=600,
 )
 
@@ -135,8 +128,13 @@ class STTRequest(BaseModel):
 
 
 class IntentRequest(BaseModel):
-    transcript: str
+    transcript: Optional[str] = None
+    text: Optional[str] = None  # alias — frontend sends 'text'
     language: str = "hi"
+
+    @property
+    def speech_text(self) -> str:
+        return self.transcript or self.text or ""
 
 
 # ---------------------------------------------------------------------------
@@ -562,62 +560,65 @@ async def text_to_speech(req: TTSRequest):
 
 
 @app.post("/api/stt")
-async def speech_to_text(req: STTRequest):
-    """Transcribe audio using Google Cloud Speech-to-Text V2. Real transcription."""
-    encoding_map = {
-        "WEBM_OPUS": speech.ExplicitDecodingConfig.AudioEncoding.WEBM_OPUS
-        if hasattr(speech.ExplicitDecodingConfig, "AudioEncoding")
-        else None,
-        "LINEAR16": speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16
-        if hasattr(speech.ExplicitDecodingConfig, "AudioEncoding")
-        else None,
-        "FLAC": speech.ExplicitDecodingConfig.AudioEncoding.FLAC
-        if hasattr(speech.ExplicitDecodingConfig, "AudioEncoding")
-        else None,
-        "MP3": speech.ExplicitDecodingConfig.AudioEncoding.MP3
-        if hasattr(speech.ExplicitDecodingConfig, "AudioEncoding")
-        else None,
-    }
+async def speech_to_text(request: Request):
+    """Transcribe audio using Google Cloud Speech-to-Text V2.
+    Accepts either:
+      - multipart/form-data with 'audio' file + 'language' field
+      - application/json with 'audio_base64' + 'language' fields
+    """
+    content_type = request.headers.get("content-type", "")
 
-    audio_bytes = base64.b64decode(req.audio_base64)
+    if "multipart" in content_type:
+        form = await request.form()
+        audio_file = form.get("audio")
+        language = str(form.get("language", "hi-IN"))
+        if audio_file is None:
+            raise HTTPException(400, "No 'audio' field in form data")
+        audio_bytes = await audio_file.read()
+    elif "json" in content_type:
+        body = await request.json()
+        audio_bytes = base64.b64decode(body.get("audio_base64", ""))
+        language = body.get("language", "hi-IN")
+    else:
+        raise HTTPException(400, f"Unsupported content type: {content_type}")
+
+    if not audio_bytes:
+        raise HTTPException(400, "Empty audio data")
+
+    # Ensure language has locale suffix
+    if "-" not in language:
+        language = f"{language}-IN"
 
     try:
         stt_client = speech.SpeechClient()
 
-        # Build recognition config for V2
+        # Use auto_decoding for WebM/Opus (let the API detect encoding)
         config = speech.RecognitionConfig(
-            explicit_decoding_config=speech.ExplicitDecodingConfig(
-                encoding=encoding_map.get(req.encoding, speech.ExplicitDecodingConfig.AudioEncoding.WEBM_OPUS),
-                sample_rate_hertz=48000,
-                audio_channel_count=1,
-            ),
-            language_codes=[req.language],
+            auto_decoding_config=speech.AutoDetectDecodingConfig(),
+            language_codes=[language],
             model="long",
         )
 
-        request = speech.RecognizeRequest(
+        stt_request = speech.RecognizeRequest(
             recognizer=f"projects/{GOOGLE_CLOUD_PROJECT}/locations/global/recognizers/_",
             config=config,
             content=audio_bytes,
         )
 
-        response = stt_client.recognize(request=request)
+        response = stt_client.recognize(request=stt_request)
 
     except Exception as e:
-        raise HTTPException(502, f"Google Cloud Speech-to-Text failed: {e}")
+        log.exception(f"STT failed: {e}")
+        raise HTTPException(502, f"Google Cloud Speech-to-Text failed: {str(e)}")
 
     if not response.results:
-        return {
-            "transcript": "",
-            "confidence": 0.0,
-            "detected_language": req.language,
-        }
+        return {"transcript": "", "confidence": 0.0, "detected_language": language}
 
     best = response.results[0].alternatives[0]
     return {
         "transcript": best.transcript,
         "confidence": round(best.confidence, 4) if best.confidence else 0.0,
-        "detected_language": req.language,
+        "detected_language": language,
     }
 
 
@@ -626,7 +627,7 @@ async def extract_intent(req: IntentRequest):
     """Use Gemini to extract structured intent from farmer's speech."""
     prompt = f"""You are a parser for an Indian agriculture app. Extract structured data from the farmer's speech.
 
-Transcript (in {LANGUAGE_NAMES.get(req.language, 'Hindi')}): "{req.transcript}"
+Transcript (in {LANGUAGE_NAMES.get(req.language, 'Hindi')}): "{req.speech_text}"
 
 Return ONLY valid JSON (no markdown, no explanation):
 {{

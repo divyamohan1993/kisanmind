@@ -29,25 +29,7 @@ export default function WeatherPage() {
   const [crop, setCrop] = useState("Tomato");
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#0a0a1a] via-[#0a1a2a] to-[#0a0a1a] text-white">
-      {/* Header */}
-      <header className="border-b border-white/10 bg-black/30 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <a href="/" className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-green-700 flex items-center justify-center text-lg font-bold">K</div>
-            <div>
-              <h1 className="text-lg font-bold bg-gradient-to-r from-emerald-400 to-green-300 bg-clip-text text-transparent">KisanMind</h1>
-              <p className="text-xs text-white/40">मौसमगुरु — Weather Guru</p>
-            </div>
-          </a>
-          <nav className="flex gap-4 text-sm">
-            <a href="/" className="text-white/60 hover:text-white transition">Dashboard</a>
-            <a href="/mandi" className="text-white/60 hover:text-white transition">Mandi</a>
-            <a href="/weather" className="text-sky-400 font-medium">Weather</a>
-          </nav>
-        </div>
-      </header>
-
+    <div className="min-h-screen text-white">
       <main className="max-w-7xl mx-auto px-4 py-8 space-y-8">
         {/* Title + Crop Selector */}
         <div className="flex items-center justify-between flex-wrap gap-4">
