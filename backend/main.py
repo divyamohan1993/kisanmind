@@ -52,29 +52,88 @@ log = logging.getLogger("kisanmind")
 # ---------------------------------------------------------------------------
 import time as _time
 
-# Advisory cache: key = "lat:lon:crop:lang", value = (timestamp, response_dict)
-_advisory_cache: dict[str, tuple[float, dict]] = {}
-_ADVISORY_CACHE_TTL = 30 * 60  # 30 minutes
+# ---------------------------------------------------------------------------
+# Persistent cache via GCS (survives deploys) + in-memory L1 cache (fast)
+# ---------------------------------------------------------------------------
+GCS_CACHE_BUCKET = "kisanmind-cache"
+_ADVISORY_TTL = 15 * 60      # 15 min — mandi prices can shift intraday
+_NDVI_TTL = 6 * 60 * 60      # 6 hours — satellite data updates weekly
+_MANDI_RAW_TTL = 60 * 60     # 1 hour — raw mandi data from AgMarkNet
 
-# NDVI cache: key = "lat:lon", value = (timestamp, response_dict)
-_ndvi_cache: dict[str, tuple[float, dict]] = {}
-_NDVI_CACHE_TTL = 6 * 60 * 60  # 6 hours
+# L1: in-memory (fast, lost on restart)
+_l1_cache: dict[str, tuple[float, dict]] = {}
 
 
-def _cache_get(cache: dict, key: str, ttl: float):
-    """Return cached value if exists and fresh, else None."""
-    entry = cache.get(key)
-    if entry is None:
+def _l1_get(key: str, ttl: float) -> dict | None:
+    entry = _l1_cache.get(key)
+    if entry and (_time.time() - entry[0]) < ttl:
+        return entry[1]
+    if entry:
+        del _l1_cache[key]
+    return None
+
+
+def _l1_set(key: str, value: dict):
+    _l1_cache[key] = (_time.time(), value)
+
+
+# L2: GCS (persistent, slower)
+async def _gcs_get(key: str, ttl: float) -> dict | None:
+    """Read cached JSON from GCS. Returns None if missing or stale."""
+    safe_key = key.replace(":", "_").replace("/", "_")
+    url = f"https://storage.googleapis.com/{GCS_CACHE_BUCKET}/advisory-cache/{safe_key}.json"
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            cached_at = data.get("_cached_at", 0)
+            if (_time.time() - cached_at) > ttl:
+                return None  # stale
+            return data
+    except Exception:
         return None
-    ts, value = entry
-    if (_time.time() - ts) > ttl:
-        del cache[key]
-        return None
-    return value
 
 
-def _cache_set(cache: dict, key: str, value):
-    cache[key] = (_time.time(), value)
+async def _gcs_set(key: str, value: dict):
+    """Write cached JSON to GCS (fire-and-forget, don't block the response)."""
+    safe_key = key.replace(":", "_").replace("/", "_")
+    try:
+        from google.cloud import storage as gcs_storage
+        gcs_client = gcs_storage.Client()
+        bucket = gcs_client.bucket(GCS_CACHE_BUCKET)
+        blob = bucket.blob(f"advisory-cache/{safe_key}.json")
+        value_with_ts = {**value, "_cached_at": _time.time()}
+        blob.upload_from_string(
+            json.dumps(value_with_ts, ensure_ascii=False, default=str),
+            content_type="application/json",
+        )
+    except Exception as e:
+        log.warning(f"GCS cache write failed for {key}: {e}")
+
+
+async def cache_get(key: str, ttl: float) -> dict | None:
+    """Try L1 (memory) then L2 (GCS). Returns None if both miss."""
+    # L1
+    hit = _l1_get(key, ttl)
+    if hit:
+        log.info(f"Cache L1 hit: {key}")
+        return hit
+    # L2
+    hit = await _gcs_get(key, ttl)
+    if hit:
+        log.info(f"Cache L2 (GCS) hit: {key}")
+        _l1_set(key, hit)  # promote to L1
+        return hit
+    return None
+
+
+async def cache_set(key: str, value: dict):
+    """Write to both L1 and L2."""
+    _l1_set(key, value)
+    # GCS write in background (don't block response)
+    asyncio.create_task(_gcs_set(key, value))
 
 # Gemini client
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -731,18 +790,15 @@ async def get_ndvi(req: NDVIRequest):
         raise HTTPException(503, "Earth Engine is not initialized. Satellite data unavailable.")
     log.info(f"NDVI request: lat={req.latitude}, lon={req.longitude}")
 
-    # --- Cache lookup (round coords to ~1 km precision) ---
-    cache_key = f"{round(req.latitude, 2)}:{round(req.longitude, 2)}"
-    cached = _cache_get(_ndvi_cache, cache_key, _NDVI_CACHE_TTL)
+    cache_key = f"ndvi:{round(req.latitude, 2)}:{round(req.longitude, 2)}"
+    cached = await cache_get(cache_key, _NDVI_TTL)
     if cached is not None:
-        log.info(f"CACHE HIT  ndvi  key={cache_key}")
         return {**cached, "cached": True}
-    log.info(f"CACHE MISS ndvi  key={cache_key}")
 
     result = await fetch_ndvi(req.latitude, req.longitude)
     if result is None:
-        raise HTTPException(404, "No satellite data available for this location. Try a different area or check back later.")
-    _cache_set(_ndvi_cache, cache_key, result)
+        raise HTTPException(404, "No satellite data available for this location.")
+    await cache_set(cache_key, result)
     result["cached"] = False
     return result
 
@@ -752,18 +808,23 @@ async def advisory(req: AdvisoryRequest):
     """Main advisory endpoint — all data from real APIs, zero fake data."""
     log.info(f"Advisory request: crop={req.crop}, lat={req.latitude}, lon={req.longitude}, lang={req.language}")
 
-    # --- Cache lookup (round coords to ~1 km precision) ---
-    cache_key = f"{round(req.latitude, 2)}:{round(req.longitude, 2)}:{req.crop}:{req.language}"
-    cached = _cache_get(_advisory_cache, cache_key, _ADVISORY_CACHE_TTL)
+    cache_key = f"adv:{round(req.latitude, 2)}:{round(req.longitude, 2)}:{req.crop}:{req.language}"
+    cached = await cache_get(cache_key, _ADVISORY_TTL)
     if cached is not None:
-        log.info(f"CACHE HIT  advisory  key={cache_key}")
-        return {**cached, "cached": True}
-    log.info(f"CACHE MISS advisory  key={cache_key}")
+        # Add staleness info for transparency
+        cached_at = cached.get("_cached_at", 0)
+        age_min = round((_time.time() - cached_at) / 60) if cached_at else 0
+        cached["cached"] = True
+        cached["data_age_minutes"] = age_min
+        cached["freshness_note"] = f"Data is {age_min} minutes old. Mandi prices may have changed."
+        return cached
 
     try:
         result = await _run_advisory(req)
-        _cache_set(_advisory_cache, cache_key, result)
         result["cached"] = False
+        result["data_age_minutes"] = 0
+        result["freshness_note"] = "Fresh data — just fetched from AgMarkNet, weather, and satellite."
+        await cache_set(cache_key, result)
         return result
     except HTTPException:
         raise
