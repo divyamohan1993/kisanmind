@@ -68,21 +68,15 @@ This required fusing **5 real data sources** in real-time:
 
 ## Architecture
 
-```
-Farmer (Voice/Web/Phone) ──→ KisanMind Backend (FastAPI on Cloud Run)
-                                    │
-                    ┌───────────────┼───────────────┐───────────────┐
-                    ▼               ▼               ▼               ▼
-              Google Earth    AgMarkNet API    Open-Meteo      Google Maps
-              Engine NDVI     (data.gov.in)   Weather API     Distance Matrix
-              (Sentinel-2)    (Live Prices)   (5-day forecast) (Real driving km)
-                    │               │               │               │
-                    └───────────────┴───────────────┴───────────────┘
-                                    │
-                              Gemini 3.1 Pro ──→ Conversational Advisory
-                                    │
-                              Cloud TTS ──→ Voice Response (22 languages)
-```
+<p align="center">
+  <img src="architecture/system-architecture.png" alt="KisanMind System Architecture" width="100%" />
+</p>
+
+### Voice Call Data Flow
+
+<p align="center">
+  <img src="architecture/data-flow.png" alt="Voice Call Data Flow" width="100%" />
+</p>
 
 ### Data Flow — Zero Fake Data
 
