@@ -5,6 +5,9 @@ NO fake data. Every data point comes from a real API call.
 
 import os
 import json
+import struct
+import math
+import io
 import base64
 import asyncio
 import logging
@@ -298,9 +301,21 @@ async def reverse_geocode(lat: float, lon: float) -> dict:
         raise HTTPException(502, f"Google Geocoding failed: {data.get('status')} — {data.get('error_message', '')}")
 
     result = data["results"][0]
-    components = {c["types"][0]: c["long_name"] for c in result["address_components"] if c.get("types")}
+    # Build a lookup mapping every type to its long_name (a component can have
+    # multiple types, e.g. ["locality", "political"]).
+    components: dict[str, str] = {}
+    for c in result.get("address_components", []):
+        for t in c.get("types", []):
+            components[t] = c["long_name"]
 
-    location_name = components.get("locality", components.get("sublocality", "Unknown"))
+    location_name = (
+        components.get("locality")
+        or components.get("sublocality_level_1")
+        or components.get("sublocality")
+        or components.get("administrative_area_level_3")
+        or components.get("neighborhood")
+        or "Unknown"
+    )
     district = components.get("administrative_area_level_2", components.get("administrative_area_level_3", ""))
     state = components.get("administrative_area_level_1", "")
 
@@ -309,6 +324,7 @@ async def reverse_geocode(lat: float, lon: float) -> dict:
         "district": district,
         "state": state,
         "formatted_address": result.get("formatted_address", ""),
+        "maps_url": f"https://www.google.com/maps/@{lat},{lon},14z",
     }
 
 
@@ -760,8 +776,39 @@ async def fetch_ndvi(lat: float, lon: float) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Beep / chime generator (pure Python, no external API)
+# ---------------------------------------------------------------------------
+def _generate_beep(freq: int = 880, duration_ms: int = 300, volume: float = 0.3) -> str:
+    """Generate a short notification chime as a base64-encoded WAV."""
+    sample_rate = 16000
+    num_samples = int(sample_rate * duration_ms / 1000)
+    buf = io.BytesIO()
+    # WAV header
+    buf.write(b'RIFF')
+    data_size = num_samples * 2
+    buf.write(struct.pack('<I', 36 + data_size))
+    buf.write(b'WAVEfmt ')
+    buf.write(struct.pack('<IHHIIHH', 16, 1, 1, sample_rate, sample_rate * 2, 2, 16))
+    buf.write(b'data')
+    buf.write(struct.pack('<I', data_size))
+    for i in range(num_samples):
+        t = i / sample_rate
+        # Fade in/out envelope to avoid clicks
+        env = min(i / 500, 1.0) * min((num_samples - i) / 500, 1.0)
+        sample = int(volume * env * 32767 * math.sin(2 * math.pi * freq * t))
+        buf.write(struct.pack('<h', max(-32768, min(32767, sample))))
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+@app.get("/api/beep")
+async def beep():
+    """Return a short notification chime as base64 WAV audio."""
+    return {"audio_base64": _generate_beep(), "content_type": "audio/wav"}
+
+
 @app.get("/api/health")
 async def health():
     return {
@@ -902,6 +949,7 @@ async def _run_advisory(req: AdvisoryRequest):
 
     response_data = {
         "location": location,
+        "maps_url": location.get("maps_url", f"https://www.google.com/maps/@{req.latitude},{req.longitude},14z"),
         "crop": crop,
         "language": req.language,
         "mandi_prices": mandis,

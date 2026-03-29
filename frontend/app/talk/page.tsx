@@ -74,6 +74,7 @@ interface ChatMessage {
   type: "farmer" | "kisanmind";
   text: string;
   timestamp: Date;
+  kind?: "greeting" | "filler" | "advisory" | "goodbye";
 }
 
 interface CallSummary {
@@ -86,6 +87,8 @@ interface CallSummary {
   distanceKm?: number;
   weatherDays?: Array<{ date: string; max_temp_c: number; min_temp_c: number; precipitation_mm: number }>;
   advisory?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 type CallState = "pre-call" | "greeting" | "listening" | "processing" | "speaking" | "ended";
@@ -305,7 +308,7 @@ export default function TalkPage() {
           ? "I could not hear you. Please call again when you are ready. Goodbye!"
           : "आपकी आवाज़ नहीं आ रही। जब चाहें दोबारा कॉल करें। नमस्ते!";
         setCallState("speaking");
-        addMessage("kisanmind", byeText);
+        addMessage("kisanmind", byeText, "goodbye");
         const byeAudio = await playTTS(byeText, language);
         await waitForAudioEnd(byeAudio);
         callActiveRef.current = false;
@@ -317,7 +320,7 @@ export default function TalkPage() {
         ? "I didn't catch that. Please tell me which crop you are growing."
         : "सुनाई नहीं दिया। बताइए आप कौनसी फसल उगा रहे हैं?";
       setCallState("speaking");
-      addMessage("kisanmind", retryText);
+      addMessage("kisanmind", retryText, "greeting");
       const retryAudio = await playTTS(retryText, language);
       await waitForAudioEnd(retryAudio);
       if (callActiveRef.current) await processOneTurn();
@@ -363,7 +366,7 @@ export default function TalkPage() {
     let factIdx = 0;
     while (!advisoryDone && callActiveRef.current && factIdx < facts.length) {
       const factText = facts[factIdx];
-      addMessage("kisanmind", factText);
+      addMessage("kisanmind", factText, "filler");
       const factAudio = await playTTS(factText, language);
       await waitForAudioEnd(factAudio);
       factIdx++;
@@ -395,6 +398,8 @@ export default function TalkPage() {
         distanceKm: bm.distance_km,
         weatherDays: advisoryResult.weather?.daily_forecast,
         advisory: advisoryText,
+        latitude: geo.latitude || undefined,
+        longitude: geo.longitude || undefined,
       });
     } else {
       advisoryText = language === "en"
@@ -402,9 +407,20 @@ export default function TalkPage() {
         : "माफ कीजिए, अभी सलाह नहीं मिल पाई। थोड़ी देर बाद फिर कोशिश करें।";
     }
 
+    // Play a chime to signal "now listen to the real advice"
+    try {
+      const beepRes = await fetch(`${API_BASE}/api/beep`);
+      if (beepRes.ok) {
+        const beepData = await beepRes.json();
+        const beep = new Audio(`data:audio/wav;base64,${beepData.audio_base64}`);
+        await beep.play();
+        await waitForAudioEnd(beep);
+      }
+    } catch { /* beep is non-critical */ }
+
     // Speak advisory
     setStatusText(t(language, "adviceReady"));
-    addMessage("kisanmind", advisoryText);
+    addMessage("kisanmind", advisoryText, "advisory");
     const advAudio = await playTTS(advisoryText, language);
     currentAudioRef.current = advAudio;
     await waitForAudioEnd(advAudio);
@@ -415,7 +431,7 @@ export default function TalkPage() {
     const goodbyeText = language === "en"
       ? "That's my advice for today. Call again anytime you need help. Goodbye and good farming!"
       : "आज के लिए मेरी सलाह यही है। जब भी ज़रूरत हो दोबारा कॉल करें। नमस्ते और अच्छी खेती करें!";
-    addMessage("kisanmind", goodbyeText);
+    addMessage("kisanmind", goodbyeText, "goodbye");
     const goodbyeAudio = await playTTS(goodbyeText, language);
     await waitForAudioEnd(goodbyeAudio);
 
@@ -425,8 +441,8 @@ export default function TalkPage() {
     setStatusText("");
   }, [language, geo.latitude, geo.longitude, listenOnce]);
 
-  const addMessage = (type: "farmer" | "kisanmind", text: string) => {
-    setMessages((prev) => [...prev, { type, text, timestamp: new Date() }]);
+  const addMessage = (type: "farmer" | "kisanmind", text: string, kind?: "greeting" | "filler" | "advisory" | "goodbye") => {
+    setMessages((prev) => [...prev, { type, text, timestamp: new Date(), kind }]);
   };
 
   /* ---- Start the call ---- */
@@ -441,7 +457,7 @@ export default function TalkPage() {
     setStatusText(t(language, "connecting"));
     const hasGps = !!(geo.latitude && geo.longitude);
     const greetText = getGreeting(language, hasGps);
-    addMessage("kisanmind", greetText);
+    addMessage("kisanmind", greetText, "greeting");
 
     const greetAudio = await playTTS(greetText, language);
     await waitForAudioEnd(greetAudio);
@@ -538,14 +554,20 @@ export default function TalkPage() {
         {/* Messages */}
         {messages.map((msg, i) => (
           <div key={i} className={`flex ${msg.type === "farmer" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+            <div className={`max-w-[85%] rounded-2xl px-4 py-3 leading-relaxed ${
               msg.type === "farmer"
-                ? "bg-blue-600/20 border border-blue-500/20 text-white/90"
-                : "bg-emerald-600/10 border border-emerald-500/20 text-white/90"
+                ? "bg-blue-600/20 border border-blue-500/20 text-white/90 text-sm"
+                : msg.kind === "filler"
+                ? "bg-white/5 border border-white/10 text-white/60 text-xs italic"
+                : msg.kind === "advisory"
+                ? "bg-emerald-600/15 border-l-4 border-emerald-400 text-white text-base font-medium"
+                : "bg-emerald-600/10 border border-emerald-500/20 text-white/90 text-sm"
             }`}>
               <div className="text-[10px] text-white/30 mb-1">
                 {msg.type === "farmer" ? "You" : "KisanMind"} · {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </div>
+              {msg.kind === "filler" && <span className="not-italic">💡 </span>}
+              {msg.kind === "advisory" && <span>🌾 </span>}
               {msg.text}
             </div>
           </div>
@@ -579,6 +601,19 @@ export default function TalkPage() {
                 </div>
                 <div className="text-lg font-bold">{summary.location}</div>
               </div>
+            )}
+
+            {/* Google Maps satellite view of farmer's location */}
+            {summary.latitude && summary.longitude && (
+              <a href={`https://www.google.com/maps/@${summary.latitude},${summary.longitude},14z`}
+                 target="_blank" rel="noopener noreferrer"
+                 className="block rounded-xl overflow-hidden border border-white/10">
+                <img
+                  src={`https://maps.googleapis.com/maps/api/staticmap?center=${summary.latitude},${summary.longitude}&zoom=13&size=400x200&maptype=hybrid&markers=color:green%7C${summary.latitude},${summary.longitude}&key=AIzaSyDNzMMqAqTJJh9LYxcIM-xb1Qjb6eMIjyI`}
+                  alt="Your location"
+                  className="w-full h-[150px] object-cover"
+                />
+              </a>
             )}
 
             {/* Best mandi — BIG price visual */}
