@@ -63,8 +63,34 @@ class SatelliteCache:
                 key = self._grid_key(p["lat"], p["lon"])
                 self.grid_index[key] = p
 
+            # Build district-level index (average satellite values per district)
+            self.district_index: dict[str, dict] = {}
+            district_points: dict[str, list] = {}
+            for p in self.points:
+                dist = p.get("district", "").strip().lower()
+                if dist:
+                    district_points.setdefault(dist, []).append(p)
+
+            for dist, pts in district_points.items():
+                # Average the numeric satellite values across all points in the district
+                avg: dict = {"district": dist, "point_count": len(pts)}
+                for key in ("ndvi", "evi", "ndwi", "vv_db", "vh_db", "lst_day_c", "lst_night_c", "sm_surface", "sm_rootzone"):
+                    vals = [p[key] for p in pts if p.get(key) is not None]
+                    if vals:
+                        avg[key] = round(sum(vals) / len(vals), 4)
+                # Use mode for categorical fields
+                for key in ("health", "moisture", "heat_stress", "rootzone_class"):
+                    cats = [p[key] for p in pts if p.get(key)]
+                    if cats:
+                        avg[key] = max(set(cats), key=cats.count)
+                # Use centroid for lat/lon
+                avg["lat"] = round(sum(p["lat"] for p in pts) / len(pts), 4)
+                avg["lon"] = round(sum(p["lon"] for p in pts) / len(pts), 4)
+                self.district_index[dist] = avg
+
             self._loaded = True
             log.info(f"Satellite cache loaded: {len(self.points)} points from {latest_path.name} (computed {self.computed_at})")
+            log.info(f"District index built: {len(self.district_index)} districts")
 
         except Exception as e:
             log.warning(f"Failed to load satellite cache: {e}")
@@ -145,10 +171,28 @@ class SatelliteCache:
         # 3. Cache miss — no data within range
         return None
 
-    def lookup_enriched(self, lat: float, lon: float) -> dict:
+    def lookup_by_district(self, district: str) -> Optional[dict]:
+        """Look up average satellite data for a district.
+        Used as fallback when exact location is not in cache."""
+        if not self._loaded or not district:
+            return None
+        key = district.strip().lower()
+        data = self.district_index.get(key)
+        if data:
+            result = data.copy()
+            result["cache_hit"] = "district"
+            result["cache_distance_km"] = 0  # district-level, not point-level
+            result["computed_at"] = self.computed_at
+            return result
+        return None
+
+    def lookup_enriched(self, lat: float, lon: float, district: str = "") -> dict:
         """Look up and format satellite data for the advisory pipeline.
         Returns structured data matching what _run_advisory expects, or empty dicts on miss."""
         raw = self.lookup(lat, lon)
+
+        if not raw and district:
+            raw = self.lookup_by_district(district)
 
         if not raw:
             return {
@@ -172,7 +216,9 @@ class SatelliteCache:
                 "images_found": 1,
                 "true_color_url": None,  # Not available from cache
                 "ndvi_color_url": None,
-                "source": f"Satellite cache (pre-computed, {raw.get('cache_distance_km', 0):.1f}km from exact location)",
+                "source": f"Satellite cache (pre-computed, {raw.get('cache_hit', 'grid')}-level, {raw.get('cache_distance_km', 0):.1f}km from exact location)"
+                    if raw.get("cache_hit") != "district"
+                    else f"Satellite cache (district average, {raw.get('point_count', 0)} points in {raw.get('district', 'unknown')})",
             }
 
         # Build satellite_extras (SAR, LST, SMAP)
@@ -252,4 +298,5 @@ class SatelliteCache:
             "cache_age_hours": round(self.cache_age_hours, 1),
             "sources": self.sources,
             "index_size": len(self.grid_index),
+            "district_count": len(self.district_index) if hasattr(self, "district_index") else 0,
         }

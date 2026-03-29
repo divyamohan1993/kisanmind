@@ -4,6 +4,7 @@ NO fake data. Every data point comes from a real API call.
 """
 
 import os
+import sys
 import json
 import struct
 import math
@@ -19,12 +20,15 @@ from typing import Optional
 import ee
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Form
+from fastapi import FastAPI, HTTPException, Request, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from starlette.websockets import WebSocketState
+import uuid
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
 from google.cloud import texttospeech_v1 as tts
 from google.cloud import speech_v2 as speech
 from google.cloud import translate_v2 as translate
@@ -205,6 +209,17 @@ if _sat_cache.is_loaded:
 else:
     log.info("Satellite cache: not available — will use live Earth Engine calls")
 
+try:
+    from backend.gemini_live import GeminiLiveSession, KISANMIND_TOOLS
+except ImportError:
+    from gemini_live import GeminiLiveSession, KISANMIND_TOOLS
+
+# ---------------------------------------------------------------------------
+# Gemini Live sessions (one per active call)
+# ---------------------------------------------------------------------------
+_live_sessions: dict[str, GeminiLiveSession] = {}
+_SESSION_TTL = 600  # 10 minutes max per session
+
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
@@ -295,6 +310,14 @@ class IntentRequest(BaseModel):
     @property
     def speech_text(self) -> str:
         return self.transcript or self.text or ""
+
+
+class ChatRequest(BaseModel):
+    session_id: str = ""
+    message: str
+    language: str = "hi"
+    latitude: float = 0
+    longitude: float = 0
 
 
 # ---------------------------------------------------------------------------
@@ -600,8 +623,15 @@ async def fetch_weather(lat: float, lon: float) -> dict:
 
     forecast_days = []
     for i in range(len(dates)):
+        # Convert YYYY-MM-DD to human-readable "29 March" format
+        # so the LLM doesn't misinterpret month numbers
+        try:
+            _parsed = datetime.strptime(dates[i], "%Y-%m-%d")
+            readable_date = _parsed.strftime("%-d %B")  # e.g., "29 March", "2 April"
+        except Exception:
+            readable_date = dates[i]
         forecast_days.append({
-            "date": dates[i],
+            "date": readable_date,
             "max_temp_c": max_temps[i] if i < len(max_temps) else None,
             "min_temp_c": min_temps[i] if i < len(min_temps) else None,
             "precipitation_mm": precip[i] if i < len(precip) else None,
@@ -1007,6 +1037,7 @@ async def generate_advisory_with_gemini(
     quantity_quintals: float = 0,
     cross_validation: list[dict] = None,
     satellite_extras: dict = None,
+    farmer_context: str = "",
 ) -> str:
     """Send pre-computed inferences to Gemini and get a human, conversational advisory."""
     language_name = LANGUAGE_NAMES.get(language, "Hindi")
@@ -1121,6 +1152,17 @@ NEAREST KVK: {nearest_kvk['name']}, {nearest_kvk.get('distance_km', '?')} km awa
   Phone: {nearest_kvk.get('phone', '1800-180-1551')}
   Toll-free helpline: 1800-180-1551"""
 
+    farmer_problems_section = ""
+    if farmer_context:
+        farmer_problems_section = f"""
+FARMER'S OWN OBSERVATIONS (MUST address these specifically):
+{farmer_context}
+IMPORTANT: Cross-reference these observations with satellite and weather data.
+If farmer reports yellowing -> check satellite health and soil moisture data.
+If farmer reports pests -> refer to KVK, do NOT guess treatment.
+If farmer reports recent spraying -> note that satellite data may not reflect this yet.
+"""
+
     # Weather with crop interaction
     weather_actions = ""
     daily = weather.get("daily_forecast", [])
@@ -1195,16 +1237,19 @@ WEATHER (today's forecast from Open-Meteo):
 {weather['summary']}
 {weather_actions}
 
+{farmer_problems_section}
+
 {kvk_section}
 
 {_build_cross_validation_section(cross_validation)}
 
-OUTPUT FORMAT (exactly 5 short sections, in this order):
-1. Crop health (1-2 sentences, state satellite data age)
-2. Weather action (1-2 sentences, specific DO or DON'T with date)
-3. Best mandi recommendation (price, distance, net profit)
-4. Sell timing advice (based on price trend, hedge if low confidence)
-5. KVK info + disclaimer
+OUTPUT FORMAT (in this order):
+1. Crop health — satellite data cross-referenced with farmer observations (1-2 sentences)
+2. Farmer's problem response — directly address what they reported, if any (1-3 sentences, skip if no problems)
+3. Weather action (1-2 sentences, specific DO or DON'T with date)
+4. Best mandi recommendation (price, distance, net profit)
+5. Sell timing advice (based on price trend, hedge if low confidence)
+6. KVK info + disclaimer
 
 End with: "Yeh aaj ki data ke hisaab se hai. Final faisla aapka hai."
 """
@@ -2114,27 +2159,126 @@ async def _background_refine_satellite(lat: float, lon: float):
         log.warning(f"Background satellite refinement failed for ({lat}, {lon}): {e}")
 
 
+async def _handle_tool_call(
+    name: str,
+    args: dict,
+    latitude: float,
+    longitude: float,
+    language: str,
+) -> dict:
+    """Handle Gemini Live function calls by executing the real data pipeline."""
+    if name != "fetch_farm_data":
+        return {"error": f"Unknown function: {name}"}
+
+    try:
+        crop = args.get("crop", "Unknown")
+        sowing_date = args.get("sowing_date", "")
+        quantity = args.get("quantity_quintals", 0)
+        problems = args.get("problems", "")
+        irrigation = args.get("irrigation_type", "")
+        recent_activities = args.get("recent_activities", "")
+        selling_timeline = args.get("selling_timeline", "")
+        soil_type = args.get("soil_type", "")
+        land_area = args.get("land_area_bigha", 0)
+        extra = args.get("extra_observations", "")
+
+        req = AdvisoryRequest(
+            latitude=latitude,
+            longitude=longitude,
+            crop=crop,
+            language=language,
+            intent="full_advisory",
+            quantity_quintals=quantity,
+            sowing_date=sowing_date,
+        )
+        result = await _run_advisory(req)
+
+        farmer_context_parts = []
+        if problems:
+            farmer_context_parts.append(f"FARMER REPORTED PROBLEMS: {problems}")
+        if irrigation:
+            farmer_context_parts.append(f"IRRIGATION: {irrigation}")
+        if recent_activities:
+            farmer_context_parts.append(f"RECENT ACTIVITIES: {recent_activities}")
+        if selling_timeline:
+            farmer_context_parts.append(f"SELLING PLAN: {selling_timeline}")
+        if soil_type:
+            farmer_context_parts.append(f"SOIL TYPE: {soil_type}")
+        if land_area > 0:
+            farmer_context_parts.append(f"LAND AREA: {land_area} bigha")
+        if extra:
+            farmer_context_parts.append(f"EXTRA OBSERVATIONS: {extra}")
+        farmer_context = "\n".join(farmer_context_parts) if farmer_context_parts else "No additional context from farmer."
+
+        location = result.get("location", {})
+        best = result.get("best_mandi", {})
+        local = result.get("local_mandi", {})
+        weather = result.get("weather", {})
+        kvk = result.get("nearest_kvk", {})
+        sat = result.get("satellite", {})
+        growth = result.get("growth_stage", {})
+        trend = result.get("price_trend", {})
+        extras = result.get("satellite_extras", {})
+        cross_val = result.get("cross_validation", [])
+
+        data = {
+            "location": f"{location.get('location_name', '?')}, {location.get('state', '?')}",
+            "crop": crop,
+            "farmer_context": farmer_context,
+            "best_mandi": {
+                "name": best.get("market", "?"),
+                "price_per_quintal": best.get("modal_price", 0),
+                "distance_km": best.get("distance_km", "?"),
+                "travel_time": best.get("duration_text", "?"),
+                "net_profit_per_quintal": best.get("net_profit_per_quintal", 0),
+            },
+            "local_mandi": {
+                "name": local.get("market", "?") if local else "?",
+                "price_per_quintal": local.get("modal_price", 0) if local else 0,
+                "net_profit_per_quintal": local.get("net_profit_per_quintal", 0) if local else 0,
+            },
+            "weather_summary": weather.get("summary", "Weather data not available"),
+            "weather_forecast": weather.get("daily_forecast", [])[:5],
+            "satellite_health": sat.get("health", "Not available") if sat else "Not available",
+            "satellite_ndvi": sat.get("ndvi", None) if sat else None,
+            "satellite_image_date": sat.get("image_date", "?") if sat else "?",
+            "growth_stage": growth.get("stage", "unknown") if growth else "unknown",
+            "growth_detail": growth.get("detail", "") if growth else "",
+            "price_trend": trend.get("trend", "stable") if trend else "stable",
+            "price_trend_percent": trend.get("trend_percent", 0) if trend else 0,
+            "nearest_kvk": {
+                "name": kvk.get("name", "?") if kvk else "?",
+                "distance_km": kvk.get("distance_km", "?") if kvk else "?",
+                "phone": kvk.get("phone", "1800-180-1551") if kvk else "1800-180-1551",
+            },
+            "soil_moisture": extras.get("sar", {}).get("moisture_class", "unknown") if extras else "unknown",
+            "heat_stress": extras.get("lst", {}).get("heat_stress", "none") if extras else "none",
+            "cross_validation_warnings": [cv.get("finding", "") for cv in cross_val] if cross_val else [],
+            "instructions": (
+                "Now deliver a PERSONALIZED advisory to the farmer. "
+                "DIRECTLY ADDRESS their reported problems using the satellite and weather data. "
+                "Mention specific dates for weather actions. "
+                "Give mandi recommendation with price, distance, and net profit. "
+                "If they reported pests/disease, refer to the nearest KVK. "
+                "Keep it under 150 words. End with 'This is based on today's data. The final decision is yours.' "
+                "Then ask if they have any other questions."
+            ),
+        }
+        return data
+
+    except Exception as e:
+        log.exception(f"Tool call handler failed: {e}")
+        return {
+            "error": str(e),
+            "instructions": "Tell the farmer there was a technical issue fetching data. Ask them to try again or call the KVK helpline at 1800-180-1551.",
+        }
+
+
 async def _run_advisory(req: AdvisoryRequest):
     crop = req.crop
-
-    # If crop is "auto" or empty, extract from the intent/transcript using Gemini
-    if not crop or crop.lower() == "auto":
-        intent_text = req.intent or ""
-        if intent_text:
-            try:
-                _extract_prompt = f'Extract the crop name from this farmer\'s speech. Return ONLY the crop name in English (e.g., "Tomato", "Wheat", "Rice"). If no crop mentioned, return "Tomato".\n\nSpeech: "{intent_text}"'
-                _loop = asyncio.get_event_loop()
-                extract_resp = await _loop.run_in_executor(
-                    None, lambda: gemini_client.models.generate_content(model="gemini-3-flash-preview", contents=_extract_prompt)
-                )
-                crop = extract_resp.text.strip().strip('"').strip("'")
-                if not crop or len(crop) > 30:
-                    crop = "Tomato"
-            except Exception:
-                crop = "Tomato"
-        else:
-            crop = "Tomato"
-        log.info(f"Auto-detected crop: {crop}")
+    if not crop or crop.lower() in ("auto", "unknown"):
+        crop = "Unknown"
+    log.info(f"Advisory for crop: {crop}")
 
     # 0. Try local satellite cache FIRST (instant, <1ms, no EE call)
     sat_from_cache = False
@@ -2174,6 +2318,20 @@ async def _run_advisory(req: AdvisoryRequest):
     location = await location_task
     log.info(f"Location: {location}")
 
+    # District-level satellite fallback (if exact location cache missed)
+    if not sat_from_cache and _sat_cache.is_loaded and location.get("district"):
+        cached_sat = _sat_cache.lookup_enriched(req.latitude, req.longitude, district=location["district"])
+        if cached_sat.get("cache_hit"):
+            ndvi_data = cached_sat.get("ndvi_data")
+            satellite_extras = cached_sat.get("satellite_extras", {})
+            sat_from_cache = True
+            log.info(f"Satellite data from district fallback: {location['district']}")
+            # Cancel live EE tasks if they were launched
+            if ndvi_task and not ndvi_task.done():
+                ndvi_task.cancel()
+            if sat_extras_task and not sat_extras_task.done():
+                sat_extras_task.cancel()
+
     # 2. Mandi prices (needs state from geocode)
     mandis = await fetch_mandi_prices(crop, location["state"])
     log.info(f"Found {len(mandis)} mandis with prices")
@@ -2186,11 +2344,13 @@ async def _run_advisory(req: AdvisoryRequest):
     # 4. NDVI — only if not already from cache
     if not sat_from_cache and ndvi_task:
         try:
-            ndvi_data = await asyncio.wait_for(ndvi_task, timeout=3.0)
+            ndvi_data = await asyncio.wait_for(ndvi_task, timeout=8.0)
             if ndvi_data:
                 log.info(f"NDVI (live EE): {ndvi_data['ndvi']}, Health: {ndvi_data['health']}")
-        except (asyncio.TimeoutError, Exception):
-            log.info("NDVI skipped (slow/unavailable) — proceeding without satellite data")
+        except asyncio.TimeoutError:
+            log.warning("NDVI live fetch timed out after 8s — proceeding without satellite data")
+        except Exception as e:
+            log.warning(f"NDVI live fetch failed: {e} — proceeding without satellite data")
 
         # NDVI trajectory — best-effort, don't block
         if ndvi_data:
@@ -2204,11 +2364,13 @@ async def _run_advisory(req: AdvisoryRequest):
     # 4-extra. Get additional satellite data (SAR, MODIS LST, SMAP) — only if not from cache
     if not sat_from_cache and sat_extras_task:
         try:
-            satellite_extras = await asyncio.wait_for(sat_extras_task, timeout=10.0)
+            satellite_extras = await asyncio.wait_for(sat_extras_task, timeout=15.0)
             if satellite_extras:
                 log.info(f"Satellite extras (live EE): {list(satellite_extras.keys())}")
-        except (asyncio.TimeoutError, Exception):
-            log.info("Satellite extras skipped — proceeding without SAR/LST/SMAP")
+        except asyncio.TimeoutError:
+            log.warning("Satellite extras timed out after 15s — proceeding without SAR/LST/SMAP")
+        except Exception as e:
+            log.warning(f"Satellite extras failed: {e} — proceeding without SAR/LST/SMAP")
 
     # 4a. Calculate net profits with spoilage
     mandis = calculate_net_profits(mandis, crop=crop)
@@ -2361,6 +2523,116 @@ async def text_to_speech(req: TTSRequest):
     }
 
 
+@app.websocket("/ws/chat")
+async def websocket_chat(ws: WebSocket):
+    """WebSocket endpoint for Gemini Live farmer conversations.
+
+    Protocol:
+    - Client sends: {"type": "config", "language": "hi", "latitude": 30.9, "longitude": 77.1}
+    - Client sends: {"type": "audio", "data": "<base64 PCM 16kHz mono>"}
+    - Server sends: {"type": "audio", "data": "<base64 PCM 24kHz mono>"}
+    - Server sends: {"type": "transcript", "speaker": "farmer"|"kisanmind", "text": "..."}
+    - Server sends: {"type": "status", "status": "fetching_data"|"ready"}
+    """
+    await ws.accept()
+    session_id = str(uuid.uuid4())
+    session: Optional[GeminiLiveSession] = None
+
+    try:
+        while True:
+            raw = await ws.receive_text()
+            msg = json.loads(raw)
+            msg_type = msg.get("type")
+
+            if msg_type == "config":
+                language = msg.get("language", "hi")
+                latitude = msg.get("latitude", 0)
+                longitude = msg.get("longitude", 0)
+                has_gps = latitude != 0 and longitude != 0
+
+                locale_map = {
+                    "hi": "hi-IN", "ta": "ta-IN", "te": "te-IN", "bn": "bn-IN",
+                    "mr": "mr-IN", "gu": "gu-IN", "kn": "kn-IN", "ml": "ml-IN",
+                    "pa": "pa-IN", "en": "en-IN",
+                }
+                locale = locale_map.get(language, "hi-IN")
+
+                async def _on_audio(pcm_data: bytes):
+                    if ws.client_state == WebSocketState.CONNECTED:
+                        import base64 as b64
+                        await ws.send_json({
+                            "type": "audio",
+                            "data": b64.b64encode(pcm_data).decode(),
+                        })
+
+                async def _on_transcript(speaker: str, text: str):
+                    if ws.client_state == WebSocketState.CONNECTED:
+                        display_text = text
+                        if language != "en":
+                            try:
+                                translate_client = translate.Client()
+                                result = translate_client.translate(
+                                    text, target_language=language, source_language="en"
+                                )
+                                import html as html_mod
+                                display_text = html_mod.unescape(result["translatedText"])
+                            except Exception:
+                                display_text = text
+                        await ws.send_json({
+                            "type": "transcript",
+                            "speaker": speaker,
+                            "text": display_text,
+                            "text_en": text,
+                        })
+
+                async def _on_tool_call(name: str, args: dict) -> dict:
+                    if ws.client_state == WebSocketState.CONNECTED:
+                        await ws.send_json({"type": "status", "status": "fetching_data"})
+                    result = await _handle_tool_call(name, args, latitude, longitude, language)
+                    if ws.client_state == WebSocketState.CONNECTED:
+                        await ws.send_json({"type": "status", "status": "ready"})
+                    return result
+
+                async def _on_turn_complete():
+                    if ws.client_state == WebSocketState.CONNECTED:
+                        await ws.send_json({"type": "turn_complete"})
+
+                session = GeminiLiveSession(
+                    api_key=GEMINI_API_KEY,
+                    language_code=locale,
+                    has_gps=has_gps,
+                    latitude=latitude,
+                    longitude=longitude,
+                    on_audio=_on_audio,
+                    on_transcript=_on_transcript,
+                    on_tool_call=_on_tool_call,
+                    on_turn_complete=_on_turn_complete,
+                )
+                await session.start()
+                _live_sessions[session_id] = session
+                await ws.send_json({"type": "session_started", "session_id": session_id})
+
+            elif msg_type == "audio" and session:
+                import base64 as b64
+                pcm_data = b64.b64decode(msg["data"])
+                await session.send_audio(pcm_data)
+
+            elif msg_type == "text" and session:
+                await session.send_text(msg.get("text", ""))
+
+            elif msg_type == "end":
+                break
+
+    except WebSocketDisconnect:
+        log.info(f"WebSocket disconnected: {session_id}")
+    except Exception as e:
+        log.error(f"WebSocket error: {e}")
+    finally:
+        if session:
+            await session.close()
+        _live_sessions.pop(session_id, None)
+
+
 @app.post("/api/stt")
 async def speech_to_text(request: Request):
     """Transcribe audio using Google Cloud Speech-to-Text V2.
@@ -2461,47 +2733,210 @@ Return ONLY valid JSON (no markdown, no explanation):
 
 
 # ---------------------------------------------------------------------------
+# Text chat (for Twilio and fallback)
+# ---------------------------------------------------------------------------
+_text_sessions: dict[str, dict] = {}
+
+CHAT_SYSTEM_PROMPT = """You are KisanMind — a wise, warm, knowledgeable farming neighbor.
+
+You are having a text conversation with an Indian farmer. Your task:
+1. Greet them warmly
+2. Gather farm information through natural conversation
+3. When you have enough info, call fetch_farm_data
+4. Deliver a personalized advisory
+
+CONVERSATION LANGUAGE: Respond in English only. Translation happens automatically.
+
+INFORMATION TO GATHER (naturally, not as interrogation):
+- Crop name (REQUIRED)
+- Sowing date / crop age
+- Land area
+- Problems: pests, disease, yellowing, wilting
+- Irrigation type
+- Recent activities: spraying, fertilizer
+- Quantity expected
+- Selling timeline
+- Any other observations
+
+RULES:
+- Ask 2-3 related things per turn
+- Acknowledge farmer's answer with a short relevant insight before next question
+- After 2-3 exchanges, call fetch_farm_data with whatever you have
+- Keep responses under 50 words (these get spoken via TTS)
+- NEVER recommend pesticide brands, NEVER give loan advice
+- For pests/disease: refer to KVK
+"""
+
+
+@app.post("/api/chat")
+async def text_chat(req: ChatRequest):
+    """Text-based chat endpoint — used by Twilio and as fallback."""
+    session_id = req.session_id or str(uuid.uuid4())
+
+    if session_id not in _text_sessions:
+        _text_sessions[session_id] = {
+            "history": [],
+            "language": req.language,
+            "latitude": req.latitude,
+            "longitude": req.longitude,
+            "created_at": _time.time(),
+        }
+
+    session = _text_sessions[session_id]
+    session["history"].append({"role": "user", "parts": [{"text": req.message}]})
+
+    has_gps = req.latitude != 0 and req.longitude != 0
+    location_note = f"Farmer's GPS: ({req.latitude}, {req.longitude})" if has_gps else "No GPS available."
+
+    contents = []
+    for turn in session["history"]:
+        contents.append(types.Content(
+            role=turn["role"],
+            parts=[types.Part(text=p["text"]) if "text" in p else
+                   types.Part(function_call=types.FunctionCall(name=p["function_call"]["name"], args=p["function_call"]["args"])) if "function_call" in p else
+                   types.Part(function_response=types.FunctionResponse(name=p["function_response"]["name"], response=p["function_response"]["response"])) if "function_response" in p else
+                   types.Part(text="")
+                   for p in turn["parts"]],
+        ))
+
+    tool_decls = [
+        {
+            "name": "fetch_farm_data",
+            "description": "Fetch comprehensive farm data including mandi prices, satellite crop health, weather forecast, growth stage, and nearest KVK for a farmer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "crop": {"type": "string", "description": "Crop name in English"},
+                    "sowing_date": {"type": "string", "description": "Sowing date YYYY-MM-DD or empty"},
+                    "land_area_bigha": {"type": "number", "description": "Land area in bigha, 0 if unknown"},
+                    "problems": {"type": "string", "description": "Farmer-reported problems"},
+                    "irrigation_type": {"type": "string", "description": "Irrigation method"},
+                    "recent_activities": {"type": "string", "description": "Recent farming activities"},
+                    "quantity_quintals": {"type": "number", "description": "Quantity in quintals, 0 if unknown"},
+                    "selling_timeline": {"type": "string", "description": "When farmer wants to sell"},
+                    "soil_type": {"type": "string", "description": "Soil type if known"},
+                    "extra_observations": {"type": "string", "description": "Any other observations"},
+                },
+                "required": ["crop"],
+            },
+        },
+    ]
+
+    try:
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: gemini_client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=CHAT_SYSTEM_PROMPT + f"\n\n{location_note}",
+                    tools=[types.Tool(function_declarations=[types.FunctionDeclaration(**fd) for fd in tool_decls])],
+                ),
+            ),
+        )
+
+        # Check for function call
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if part.function_call:
+                    fc = part.function_call
+                    tool_result = await _handle_tool_call(
+                        fc.name, dict(fc.args),
+                        req.latitude, req.longitude, req.language
+                    )
+
+                    session["history"].append({
+                        "role": "model",
+                        "parts": [{"function_call": {"name": fc.name, "args": dict(fc.args)}}]
+                    })
+                    session["history"].append({
+                        "role": "user",
+                        "parts": [{"function_response": {"name": fc.name, "response": tool_result}}]
+                    })
+
+                    contents2 = []
+                    for turn in session["history"]:
+                        parts = []
+                        for p in turn["parts"]:
+                            if "text" in p:
+                                parts.append(types.Part(text=p["text"]))
+                            elif "function_call" in p:
+                                parts.append(types.Part(function_call=types.FunctionCall(
+                                    name=p["function_call"]["name"], args=p["function_call"]["args"],
+                                )))
+                            elif "function_response" in p:
+                                parts.append(types.Part(function_response=types.FunctionResponse(
+                                    name=p["function_response"]["name"], response=p["function_response"]["response"],
+                                )))
+                        contents2.append(types.Content(role=turn["role"], parts=parts))
+
+                    response2 = await loop.run_in_executor(
+                        None,
+                        lambda: gemini_client.models.generate_content(
+                            model="gemini-3-flash-preview",
+                            contents=contents2,
+                            config=types.GenerateContentConfig(
+                                system_instruction=CHAT_SYSTEM_PROMPT + f"\n\n{location_note}",
+                            ),
+                        ),
+                    )
+                    response_text = response2.text.strip()
+                    session["history"].append({"role": "model", "parts": [{"text": response_text}]})
+
+                    display_text = response_text
+                    if req.language != "en":
+                        try:
+                            tc = translate.Client()
+                            tr = tc.translate(response_text, target_language=req.language, source_language="en")
+                            import html
+                            display_text = html.unescape(tr["translatedText"])
+                        except Exception:
+                            pass
+
+                    return {
+                        "session_id": session_id,
+                        "response": display_text,
+                        "response_en": response_text,
+                        "has_advisory": True,
+                    }
+
+        response_text = response.text.strip()
+        session["history"].append({"role": "model", "parts": [{"text": response_text}]})
+
+        display_text = response_text
+        if req.language != "en":
+            try:
+                tc = translate.Client()
+                tr = tc.translate(response_text, target_language=req.language, source_language="en")
+                import html
+                display_text = html.unescape(tr["translatedText"])
+            except Exception:
+                pass
+
+        return {
+            "session_id": session_id,
+            "response": display_text,
+            "response_en": response_text,
+            "has_advisory": False,
+        }
+
+    except Exception as e:
+        log.exception(f"Chat error: {e}")
+        return {
+            "session_id": session_id,
+            "response": "Technical issue. Please try again.",
+            "response_en": "Technical issue. Please try again.",
+            "has_advisory": False,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Twilio Voice — Call session memory + returning caller cache
 # ---------------------------------------------------------------------------
 # In-memory call session (active call context)
 _call_sessions: dict[str, dict] = {}  # {phone_number: {crop, lat, lon, state, language, last_advisory, last_advisory_data, timestamp}}
 _CALL_SESSION_TTL = 7 * 24 * 60 * 60  # 7 days for returning caller recognition
-
-TWILIO_WELCOME_NEW = {
-    "hi": "नमस्ते भाई! मैं किसानमाइंड हूँ, आपका खेती का साथी। बताइए, कौनसी फसल लगाई है और कहाँ हैं आप?",
-    "en": "Hello friend! I'm KisanMind, your farming companion. Tell me, what crop are you growing and where are you?",
-    "ta": "வணக்கம் நண்பா! நான் கிசான்மைண்ட், உங்கள் விவசாய தோழன். என்ன பயிர் போட்டிருக்கீங்க, எங்கே இருக்கீங்க?",
-    "te": "నమస్కారం అన్నా! నేను కిసాన్‌మైండ్, మీ వ్యవసాయ నేస్తం. ఏం పంట వేశారు, ఎక్కడ ఉన్నారు?",
-    "bn": "নমস্কার ভাই! আমি কিসানমাইন্ড, আপনার চাষের সাথী। বলুন, কী ফসল করেছেন আর কোথায় আছেন?",
-}
-
-TWILIO_WELCOME_RETURNING = {
-    "hi": "नमस्ते भाई! आपने पिछली बार {crop} के बारे में पूछा था {location} से। आज का update सुनना है या कोई नया सवाल?",
-    "en": "Hello again! Last time you asked about {crop} from {location}. Want today's update or a new question?",
-    "ta": "வணக்கம்! கடந்த முறை {location} இலிருந்து {crop} பற்றி கேட்டீர்கள். இன்றைய update வேணுமா?",
-    "te": "నమస్కారం! గత సారి {location} నుండి {crop} గురించి అడిగారు. ఈరోజు update కావాలా?",
-    "bn": "নমস্কার! গতবার {location} থেকে {crop} নিয়ে জিজ্ঞেস করেছিলেন। আজকের update শুনবেন?",
-    "mr": "नमस्कार! मागच्या वेळी {location} वरून {crop} बद्दल विचारलं होतं। आजचा update हवा का?",
-    "gu": "નમસ્તે! ગઈ વખતે {location} થી {crop} વિશે પૂછ્યું હતું। આજનો update સાંભળશો?",
-    "kn": "ನಮಸ್ಕಾರ! ಕಳೆದ ಬಾರಿ {location} ಇಂದ {crop} ಬಗ್ಗೆ ಕೇಳಿದ್ದೀರಿ. ಇವತ್ತಿನ update ಬೇಕಾ?",
-    "ml": "നമസ്കാരം! കഴിഞ്ഞ തവണ {location} ൽ നിന്ന് {crop} കുറിച്ച് ചോദിച്ചിരുന്നു. ഇന്നത്തെ update വേണോ?",
-    "pa": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ! ਪਿਛਲੀ ਵਾਰ {location} ਤੋਂ {crop} ਬਾਰੇ ਪੁੱਛਿਆ ਸੀ। ਅੱਜ ਦਾ update ਸੁਣਨਾ?",
-}
-
-TWILIO_FOLLOWUP = {
-    "hi": "और कोई सवाल? मौसम, कोई और मंडी, या कुछ और — बोलिए भाई, मैं सुन रहा हूँ।",
-    "en": "Any other question? Weather, another mandi, or anything else — go ahead, I'm listening.",
-}
-
-TWILIO_GOODBYE = {
-    "hi": "अच्छा भाई, ध्यान रखिए! कल फिर कॉल कर लेना। जय जवान जय किसान!",
-    "en": "Take care friend! Call again tomorrow. Jai Jawaan Jai Kisaan!",
-}
-
-TWILIO_RETRY = {
-    "hi": "एक बार और बोलिए भाई, नेटवर्क थोड़ा कमज़ोर है।",
-    "en": "Please say that again, the network is a bit weak.",
-}
 
 BASE_URL = os.getenv("BASE_URL", "https://kisanmind-api-409924770511.asia-south1.run.app")
 
@@ -2572,162 +3007,95 @@ async def _send_sms_summary(to_number: str, advisory_data: dict, language: str =
 
 @app.post("/api/voice/incoming")
 async def twilio_incoming_call(request: Request):
-    """Twilio webhook: farmer calls. Check if returning caller, greet warmly."""
+    """Twilio webhook: farmer calls. Start a Gemini-powered conversation."""
     form = await request.form()
     caller = form.get("From", "unknown")
     log.info(f"Incoming call from {caller}")
 
-    # Check if returning caller
-    session = _call_sessions.get(caller)
-    is_returning = session and (_time.time() - session.get("timestamp", 0)) < _CALL_SESSION_TTL
+    session_id = f"twilio_{caller}_{int(_time.time())}"
 
+    old_session = _call_sessions.get(caller)
+    is_returning = old_session and (_time.time() - old_session.get("timestamp", 0)) < _CALL_SESSION_TTL
+
+    greeting_msg = "Hello, I am calling for farming advice."
     if is_returning:
-        crop = session.get("crop", "")
-        location = session.get("location_name", "")
-        lang = session.get("language", "hi")
-        greeting_template = TWILIO_WELCOME_RETURNING.get(lang, TWILIO_WELCOME_RETURNING["hi"])
-        greeting = greeting_template.format(crop=crop, location=location)
-        locale = LANGUAGE_TO_LOCALE.get(lang, "hi-IN")
-    else:
-        greeting = TWILIO_WELCOME_NEW["hi"]
-        locale = "hi-IN"
+        crop = old_session.get("crop", "")
+        loc = old_session.get("location_name", "")
+        greeting_msg = f"I called before about {crop} from {loc}. I want today's update."
 
-    safe_greeting = greeting.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    lat = old_session.get("lat", 0) if old_session else 0
+    lon = old_session.get("lon", 0) if old_session else 0
 
+    chat_req = ChatRequest(
+        session_id=session_id, message=greeting_msg,
+        language="hi", latitude=lat, longitude=lon,
+    )
+    chat_resp = await text_chat(chat_req)
+    greeting_text = chat_resp["response"]
+
+    _call_sessions[caller] = {
+        "chat_session_id": session_id, "timestamp": _time.time(),
+        "language": "hi", "lat": lat, "lon": lon,
+    }
+
+    safe_greeting = greeting_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Aditi" language="{locale}">
-        {safe_greeting}
-    </Say>
-    <Gather input="speech" language="{locale}" speechTimeout="4" timeout="12"
+    <Say voice="Polly.Aditi" language="hi-IN">{safe_greeting}</Say>
+    <Gather input="speech" language="hi-IN" speechTimeout="4" timeout="12"
             action="{BASE_URL}/api/voice/process" method="POST">
-        <Say voice="Polly.Aditi" language="{locale}">
-            {"बोलिए भाई, मैं सुन रहा हूँ।" if locale == "hi-IN" else "Go ahead, I am listening."}
-        </Say>
     </Gather>
-    <Say voice="Polly.Aditi" language="{locale}">
-        {TWILIO_GOODBYE.get("hi" if locale == "hi-IN" else "en", TWILIO_GOODBYE["hi"])}
-    </Say>
 </Response>"""
     return Response(content=twiml, media_type="application/xml")
 
 
 @app.post("/api/voice/process")
 async def twilio_process_speech(request: Request):
-    """Twilio webhook: process farmer speech, retain context for follow-ups."""
+    """Twilio webhook: process farmer speech through Gemini conversation."""
     form = await request.form()
     speech_result = form.get("SpeechResult", "")
     caller = form.get("From", "unknown")
     log.info(f"Speech from {caller}: {speech_result}")
 
+    session = _call_sessions.get(caller, {})
+    chat_session_id = session.get("chat_session_id", f"twilio_{caller}")
+    lang = session.get("language", "hi")
+    lat = session.get("lat", 0)
+    lon = session.get("lon", 0)
+    locale = LANGUAGE_TO_LOCALE.get(lang, "hi-IN")
+
     if not speech_result:
-        safe_retry = TWILIO_RETRY["hi"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        chat_req = ChatRequest(
+            session_id=chat_session_id,
+            message="(farmer was silent, could not hear anything)",
+            language=lang, latitude=lat, longitude=lon,
+        )
+        resp = await text_chat(chat_req)
+        safe_text = resp["response"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Aditi" language="hi-IN">
-        {safe_retry}
-    </Say>
-    <Gather input="speech" language="hi-IN" speechTimeout="4" timeout="12"
+    <Say voice="Polly.Aditi" language="{locale}">{safe_text}</Say>
+    <Gather input="speech" language="{locale}" speechTimeout="4" timeout="12"
             action="{BASE_URL}/api/voice/process" method="POST">
-        <Say voice="Polly.Aditi" language="hi-IN">
-            बोलिए भाई।
-        </Say>
     </Gather>
-    <Say voice="Polly.Aditi" language="hi-IN">
-        {TWILIO_GOODBYE["hi"]}
-    </Say>
 </Response>"""
         return Response(content=twiml, media_type="application/xml")
 
     try:
-        # Get existing session context
-        session = _call_sessions.get(caller, {})
-
-        # Extract intent from speech using Gemini with dialect awareness
-        intent_prompt = f"""Extract crop, location, sowing date, and intent from this Indian farmer's speech. The farmer may be speaking Hindi, Tamil, Telugu, Bengali, or English.
-Understand dialects: tamatar/tamaatar=tomato, gehun=wheat, chawal=rice, aloo=potato, pyaz=onion, gobhi=cauliflower.
-Understand sowing date references: "2 mahine pehle boya" = 60 days ago, "January mein lagaya" = 2026-01-15, "pichhle saal October" = 2025-10-15.
-Previous context: crop={session.get('crop', 'unknown')}, location={session.get('location_name', 'unknown')}, sowing_date={session.get('sowing_date', 'unknown')}
-
-Speech: "{speech_result}"
-
-Return JSON only:
-{{"crop": "<crop in English or null if not mentioned>", "location": "<location name or null>", "intent": "<full_advisory|weather_check|price_check|kvk_info|daily_action|repeat>", "language": "<detected 2-letter code: hi/en/ta/te/bn/mr/gu/kn/ml/pa>", "quantity_quintals": <number or 0 if not mentioned>, "sowing_date": "<YYYY-MM-DD or null if not mentioned>"}}"""
-
-        _loop = asyncio.get_event_loop()
-        intent_resp = await _loop.run_in_executor(
-            None, lambda: gemini_client.models.generate_content(model="gemini-3-flash-preview", contents=intent_prompt)
+        chat_req = ChatRequest(
+            session_id=chat_session_id, message=speech_result,
+            language=lang, latitude=lat, longitude=lon,
         )
-        intent_text = intent_resp.text.strip()
-        if intent_text.startswith("```"):
-            intent_text = intent_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-        intent_data = json.loads(intent_text)
-
-        # Merge with session context (retain previous crop/location if not mentioned)
-        crop = intent_data.get("crop") or session.get("crop", "Tomato")
-        location_name = intent_data.get("location") or session.get("location_name", "")
-        detected_lang = intent_data.get("language", "hi")
-        quantity = intent_data.get("quantity_quintals", 0)
-        sowing_date = intent_data.get("sowing_date") or session.get("sowing_date", "")
-        locale = LANGUAGE_TO_LOCALE.get(detected_lang, "hi-IN")
-
-        # Geocode location
-        if location_name and not session.get("lat"):
-            geo = await reverse_geocode_by_name(location_name)
-        elif session.get("lat"):
-            geo = {"latitude": session["lat"], "longitude": session["lon"]}
-        else:
-            geo = {"latitude": 28.6139, "longitude": 77.2090}
-
-        # Run advisory
-        req = AdvisoryRequest(
-            latitude=geo.get("latitude", 28.6139),
-            longitude=geo.get("longitude", 77.2090),
-            crop=crop,
-            language=detected_lang,
-            intent="full_advisory",
-            quantity_quintals=quantity,
-            sowing_date=sowing_date,
-        )
-        result = await _run_advisory(req)
-        advisory_text = result["advisory"]
-
-        # Save session for follow-ups and returning caller
-        _call_sessions[caller] = {
-            "crop": crop,
-            "lat": geo.get("latitude"),
-            "lon": geo.get("longitude"),
-            "location_name": location_name or result.get("location", {}).get("location_name", ""),
-            "state": result.get("location", {}).get("state", ""),
-            "language": detected_lang,
-            "sowing_date": sowing_date,
-            "last_advisory": advisory_text,
-            "last_advisory_data": result,
-            "timestamp": _time.time(),
-        }
-
-        # Send SMS summary (fire-and-forget)
-        asyncio.create_task(_send_sms_summary(caller, result, detected_lang))
-
-        safe_text = advisory_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        safe_followup = TWILIO_FOLLOWUP.get(detected_lang, TWILIO_FOLLOWUP["hi"]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        safe_goodbye = TWILIO_GOODBYE.get(detected_lang, TWILIO_GOODBYE["hi"]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        resp = await text_chat(chat_req)
+        response_text = resp["response"]
+        safe_text = response_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Aditi" language="{locale}">
-        {safe_text}
-    </Say>
-    <Pause length="1"/>
-    <Gather input="speech" language="{locale}" speechTimeout="4" timeout="10"
+    <Say voice="Polly.Aditi" language="{locale}">{safe_text}</Say>
+    <Gather input="speech" language="{locale}" speechTimeout="4" timeout="12"
             action="{BASE_URL}/api/voice/process" method="POST">
-        <Say voice="Polly.Aditi" language="{locale}">
-            {safe_followup}
-        </Say>
     </Gather>
-    <Say voice="Polly.Aditi" language="{locale}">
-        {safe_goodbye}
-    </Say>
 </Response>"""
         return Response(content=twiml, media_type="application/xml")
 
@@ -2736,7 +3104,7 @@ Return JSON only:
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Aditi" language="hi-IN">
-        भाई माफ कीजिए, थोड़ी तकनीकी दिक्कत आ गई। एक बार फिर से कॉल कर लीजिए।
+        Technical issue. Please call again.
     </Say>
 </Response>"""
         return Response(content=twiml, media_type="application/xml")
