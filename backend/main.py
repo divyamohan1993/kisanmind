@@ -2664,6 +2664,48 @@ class TranslateRequest(BaseModel):
     target_language: str = "hi"
 
 
+class TriviaRequest(BaseModel):
+    crop: str = ""
+    location: str = ""
+    language: str = "hi"
+
+
+@app.post("/api/trivia")
+async def generate_trivia(req: TriviaRequest):
+    """Generate 3 dynamic farming trivia facts based on crop and location."""
+    prompt = f"""Generate exactly 3 short, interesting farming trivia facts (1 sentence each) relevant to:
+Crop: {req.crop or 'general farming'}
+Location: {req.location or 'India'}
+
+Make them useful and interesting for an Indian farmer. Examples:
+- Facts about the crop's market demand or best practices
+- Regional farming facts about the location
+- Interesting satellite/technology facts used in farming
+
+Return ONLY 3 facts, one per line. No numbering, no bullets. Keep each under 20 words."""
+
+    try:
+        loop = asyncio.get_event_loop()
+        resp = await loop.run_in_executor(None, lambda: _gemini_generate(prompt))
+        facts = [line.strip() for line in resp.text.strip().split("\n") if line.strip()][:3]
+
+        # Translate if needed
+        if req.language != "en":
+            try:
+                tc = translate.Client()
+                facts = [html_mod.unescape(tc.translate(f, target_language=req.language, source_language="en")["translatedText"]) for f in facts]
+            except Exception:
+                pass
+
+        return {"trivia": facts}
+    except Exception:
+        return {"trivia": [
+            "Your call is important. Fetching satellite data and mandi prices.",
+            "Selling at the right mandi can earn Rs 200-500 more per quintal.",
+            "We use Sentinel-2 satellite to check crop health from space.",
+        ]}
+
+
 @app.post("/api/translate")
 async def batch_translate(req: TranslateRequest):
     """Batch translate texts to target language. Used for re-translating chat on language switch."""
@@ -2906,8 +2948,12 @@ CHAT_SYSTEM_PROMPT = """You are KisanMind — a wise, warm farming neighbor who 
 
 LANGUAGE: Respond in English only. Translation happens automatically.
 
+FIRST MESSAGE (greeting):
+- ALWAYS mention that you have detected their location. Say: "Namaste! I can see you are calling from [general area]. What crop are you growing?"
+- The system will tell you the farmer's GPS coordinates. Use general area name, not exact coordinates.
+
 CONVERSATION FLOW:
-1. If farmer hasn't said crop → ask: "Namaste! What crop are you growing?"
+1. If farmer hasn't said crop → greet with location detected + ask crop
 2. If farmer said crop → ask ONE follow-up with 2-3 things: sowing date, land area, any problems?
 3. After farmer's 2nd message → MUST call fetch_farm_data. No more questions.
 

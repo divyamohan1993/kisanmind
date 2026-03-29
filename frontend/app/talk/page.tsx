@@ -302,16 +302,25 @@ export default function TalkPage() {
       setCallState("processing");
       setStatusText("");
 
-      // Speak trivia only on first data fetch (not follow-ups)
+      // Speak dynamic trivia while data is being fetched
       let triviaDone = false;
       if (!advisoryDeliveredRef.current) {
-        const TRIVIA = [
-          "Your call is important to us. We are fetching satellite data and mandi prices for you.",
-          "Did you know? Selling at the right mandi can earn 200 to 500 rupees more per quintal.",
-          "We use European Sentinel-2 satellite to check your crop health from space.",
-        ];
         (async () => {
-          for (const fact of TRIVIA) {
+          // Fetch dynamic trivia based on what farmer said
+          let facts = [
+            "Your call is important. Fetching satellite data and mandi prices for you.",
+          ];
+          try {
+            const triviaResp = await fetch(`${API_BASE}/api/trivia`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ crop: transcript, location: "", language }),
+            });
+            const triviaData = await triviaResp.json();
+            if (triviaData.trivia?.length) facts = triviaData.trivia;
+          } catch { /* use default */ }
+
+          for (const fact of facts) {
             if (triviaDone || !callActiveRef.current) break;
             setCallState("speaking");
             addMessage("kisanmind", fact, "status", fact);
