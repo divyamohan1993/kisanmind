@@ -285,7 +285,7 @@ export default function TalkPage() {
 
       if (!transcript.trim()) {
         silenceCountRef.current++;
-        if (silenceCountRef.current >= 2) {
+        if (silenceCountRef.current >= 3) {
           callActiveRef.current = false;
           setCallState("ended");
           return;
@@ -315,9 +315,26 @@ export default function TalkPage() {
       silenceCountRef.current = 0;
       addMessage("farmer", transcript, "conversation", transcript);
 
-      // Send to Gemini conversation
+      // Send to Gemini conversation — show trivia while waiting
       setCallState("processing");
       setStatusText("");
+
+      // Start trivia in parallel with the API call
+      const TRIVIA = [
+        "Please wait... fetching live satellite data and mandi prices for you.",
+        "Did you know? Selling at the right mandi can earn Rs 200-500 more per quintal.",
+        "We check Sentinel-2 satellite images to assess your crop health.",
+        "Weather-informed farming reduces crop loss by up to 30%.",
+      ];
+      let triviaDone = false;
+      const triviaPromise = (async () => {
+        for (const fact of TRIVIA) {
+          if (triviaDone || !callActiveRef.current) break;
+          addMessage("kisanmind", fact, "status", fact);
+          await new Promise(r => setTimeout(r, 3000));
+        }
+      })();
+
       try {
         const chatResp = await fetch(`${API_BASE}/api/chat`, {
           method: "POST",
@@ -330,6 +347,7 @@ export default function TalkPage() {
             longitude: geo.longitude || 0,
           }),
         });
+        triviaDone = true;
         const chatData = await chatResp.json();
 
         // Speak Gemini's response
@@ -340,36 +358,10 @@ export default function TalkPage() {
         currentAudioRef.current = respAudio;
         await waitForAudioEnd(respAudio);
 
-        // If advisory was delivered, ask for follow-up then end
-        if (chatData.has_advisory) {
-          // One more listen for follow-up questions
-          if (!callActiveRef.current) break;
-          const followUp = await listenOnce();
-          if (followUp.trim()) {
-            addMessage("farmer", followUp, "conversation", followUp);
-            setCallState("processing");
-            const followResp = await fetch(`${API_BASE}/api/chat`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                session_id: sessionIdRef.current,
-                message: followUp,
-                language,
-                latitude: geo.latitude || 0,
-                longitude: geo.longitude || 0,
-              }),
-            });
-            const followData = await followResp.json();
-            setCallState("speaking");
-            addMessage("kisanmind", followData.response, followData.has_advisory ? "advisory" : "conversation", followData.response_en || followData.response);
-            const followAudio = await playTTS(followData.response, language);
-            await waitForAudioEnd(followAudio);
-          }
-          callActiveRef.current = false;
-          setCallState("ended");
-          return;
-        }
+        // KEEP CALL OPEN after advisory — farmer may ask more questions
+        // The while loop continues, farmer speaks again or stays silent
       } catch {
+        triviaDone = true;
         addMessage("kisanmind", "Technical issue. Please try again.", "status", "Technical issue. Please try again.");
       }
     }
@@ -498,6 +490,30 @@ export default function TalkPage() {
             </div>
           </div>
         )}
+
+        {/* Summary sheet after call ends */}
+        {callState === "ended" && messages.length > 0 && (() => {
+          const advisoryMsgs = messages.filter(m => m.kind === "advisory");
+          const farmerMsgs = messages.filter(m => m.type === "farmer");
+          if (advisoryMsgs.length === 0) return null;
+          return (
+            <div className="mx-auto max-w-md mt-4 rounded-xl bg-emerald-900/20 border border-emerald-500/30 p-4 space-y-3">
+              <h3 className="text-center text-sm font-bold text-emerald-400 uppercase tracking-wide">Call Summary</h3>
+              {farmerMsgs.length > 0 && (
+                <div className="text-xs text-white/50">
+                  <span className="font-medium text-white/70">You said: </span>
+                  {farmerMsgs.map(m => m.text).join(" | ")}
+                </div>
+              )}
+              <div className="text-sm text-white/90 leading-relaxed">
+                {advisoryMsgs[advisoryMsgs.length - 1].text}
+              </div>
+              <div className="text-[10px] text-white/30 text-center">
+                KisanMind · {new Date().toLocaleDateString()} · Helpline: 1800-180-1551
+              </div>
+            </div>
+          );
+        })()}
 
         <div ref={chatEndRef} />
       </div>

@@ -148,6 +148,7 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Gemini model with fallback — primary model may be overloaded
 GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+GEMINI_REASONING_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"]
 
 def _gemini_generate(contents, config=None):
     """Call Gemini with model fallback. Tries each model once."""
@@ -2346,9 +2347,30 @@ async def _handle_tool_call(
             },
             "weather_summary": weather.get("summary", "Weather data not available"),
             "weather_forecast": weather.get("daily_forecast", [])[:5],
-            "satellite_health": sat.get("health", "Not available") if sat else "Not available",
-            "satellite_ndvi": sat.get("ndvi", None) if sat else None,
-            "satellite_image_date": sat.get("image_date", "?") if sat else "?",
+            "satellite": {
+                "health": sat.get("health", "Not available") if sat else "Not available",
+                "ndvi_score": sat.get("ndvi", None) if sat else None,
+                "evi": sat.get("evi", None) if sat else None,
+                "ndwi": sat.get("ndwi", None) if sat else None,
+                "image_date": sat.get("image_date", "?") if sat else "?",
+                "source": sat.get("source", "Sentinel-2") if sat else "unavailable",
+                "trend": sat.get("trend", "unknown") if sat else "unknown",
+            },
+            "soil_moisture": {
+                "class": extras.get("sar", {}).get("moisture_class", "unknown") if extras else "unknown",
+                "detail": extras.get("sar", {}).get("moisture_detail", "") if extras else "",
+                "source": "Sentinel-1 SAR radar",
+            },
+            "surface_temperature": {
+                "day_celsius": extras.get("lst", {}).get("lst_day_celsius", None) if extras else None,
+                "heat_stress": extras.get("lst", {}).get("heat_stress", "none") if extras else "none",
+                "source": "MODIS Terra satellite",
+            },
+            "root_zone_moisture": {
+                "class": extras.get("smap", {}).get("rootzone_class", "unknown") if extras else "unknown",
+                "detail": extras.get("smap", {}).get("rootzone_detail", "") if extras else "",
+                "source": "NASA SMAP satellite",
+            },
             "growth_stage": growth.get("stage", "unknown") if growth else "unknown",
             "growth_detail": growth.get("detail", "") if growth else "",
             "price_trend": trend.get("trend", "stable") if trend else "stable",
@@ -2358,14 +2380,12 @@ async def _handle_tool_call(
                 "distance_km": kvk.get("distance_km", "?") if kvk else "?",
                 "phone": kvk.get("phone", "1800-180-1551") if kvk else "1800-180-1551",
             },
-            "soil_moisture": extras.get("sar", {}).get("moisture_class", "unknown") if extras else "unknown",
-            "heat_stress": extras.get("lst", {}).get("heat_stress", "none") if extras else "none",
             "cross_validation_warnings": [cv.get("finding", "") for cv in cross_val] if cross_val else [],
             "instructions": (
-                "Now deliver a PERSONALIZED advisory to the farmer. "
-                "DIRECTLY ADDRESS their reported problems using the satellite and weather data. "
-                "Mention specific dates for weather actions. "
-                "Give mandi recommendation with price, distance, and net profit. "
+                "Deliver a PERSONALIZED advisory. CITE actual satellite values in your reasoning: "
+                "mention NDVI score, soil moisture class, satellite name, image age. "
+                "The farmer needs to TRUST the data — show them the numbers. "
+                "Mention specific weather dates. Give mandi with price and net profit. "
                 "If they reported pests/disease, refer to the nearest KVK. "
                 "Keep it under 150 words. End with 'This is based on today's data. The final decision is yours.' "
                 "Then ask if they have any other questions."
@@ -2885,23 +2905,34 @@ _text_sessions: dict[str, dict] = {}
 CHAT_SYSTEM_PROMPT = """You are KisanMind — a wise, warm farming neighbor who helps Indian farmers.
 
 CONVERSATION LANGUAGE: Respond in English only. Translation happens automatically.
-Keep each response under 40 words — farmer is listening on phone.
+Keep each response under 60 words — farmer is listening on phone.
 
-YOUR GOAL: Have a SHORT natural conversation to understand the farmer's situation, then fetch their data.
+YOUR GOAL: Have a SHORT natural conversation, gather farm details, fetch data, give personalized advice.
 
 CONVERSATION FLOW:
 Turn 1 — If farmer hasn't said crop: "Namaste! What crop are you growing?"
-Turn 1 — If farmer said crop but nothing else: Acknowledge the crop with a warm comment. Then ask 2-3 things in ONE question: "When did you sow it, how much land, and are you seeing any issues like yellowing or pests?"
-Turn 1 — If farmer gave crop + many details already: Ask ONE quick follow-up: "How are you irrigating — borwell, canal, or rain?"
+Turn 1 — If farmer said crop but nothing else: Acknowledge the crop warmly. Then ask 2-3 things in ONE question: "When did you sow it, how much land, and are you seeing any issues like yellowing or pests?"
+Turn 1 — If farmer gave crop + many details: Ask ONE follow-up: "How are you irrigating — borwell, canal, or rain?"
 
-Turn 2 — After farmer answers your questions: Call fetch_farm_data with EVERYTHING you've learned. Do NOT ask more questions. You MUST call the function now.
+Turn 2 — After farmer answers: Call fetch_farm_data with EVERYTHING you've learned. No more questions.
 
-IMPORTANT RULES:
-- NEVER go beyond 2 farmer turns before calling fetch_farm_data
-- After farmer's 2nd message, you MUST call fetch_farm_data — no exceptions
-- Pass ALL information the farmer mentioned to the function, even minor details
-- After receiving data, deliver a personalized advisory that references what the farmer told you
-- Never recommend pesticide brands. For pests/disease: refer to KVK helpline 1800-180-1551
+AFTER RECEIVING DATA — ADVISORY DELIVERY:
+You will receive satellite data, weather, mandi prices. SHOW YOUR REASONING using the actual data values:
+- Satellite: "Sentinel-2 satellite ki X din purani image se aapki fasal ka health score 0.XX hai" (use the actual NDVI number)
+- Soil: "SAR radar data dikhata hai mitti [wet/dry] hai" (use actual moisture class)
+- Weather: "29 aur 30 March ko barish hogi, isliye paani mat daaliye" (use actual dates)
+- Mandi: "PMY Kather Solan mandi mein Rs XXXX/quintal mil raha hai, XX km door hai" (use actual numbers)
+- If farmer mentioned problems, cross-reference: "Aapne patte peele bataye — satellite health score 0.XX confirm karta hai, KVK se milein"
+
+ALWAYS cite which satellite/source the data came from so farmer trusts it.
+
+AFTER ADVISORY — KEEP THE CALL OPEN:
+- Say "Kya aapka koi aur sawal hai?" (Any other questions?)
+- If farmer asks more, answer using the SAME data you already have
+- If farmer asks about a different crop, call fetch_farm_data again
+- NEVER end the conversation yourself. Only the farmer ends it by being silent.
+
+SAFETY: Never recommend pesticide brands. For pests/disease: refer to KVK helpline 1800-180-1551.
 """
 
 
