@@ -100,7 +100,7 @@ class SatelliteCache:
         except Exception:
             return 999
 
-    def lookup(self, lat: float, lon: float, max_distance_km: float = 15.0) -> Optional[dict]:
+    def lookup(self, lat: float, lon: float, max_distance_km: float = 50.0) -> Optional[dict]:
         """Look up satellite data for a location.
 
         1. Try grid-snap O(1) lookup
@@ -120,18 +120,20 @@ class SatelliteCache:
             return result
 
         # 2. Nearest-neighbor search within max_distance_km
-        # Check adjacent grid cells first (3x3 neighborhood)
+        # Search multiple grid step sizes to handle mixed-resolution cache
         best = None
         best_dist = max_distance_km + 1
-        for dlat in [-self.grid_step, 0, self.grid_step]:
-            for dlon in [-self.grid_step, 0, self.grid_step]:
-                adj_key = self._grid_key(lat + dlat, lon + dlon)
-                if adj_key in self.grid_index:
-                    p = self.grid_index[adj_key]
-                    d = self._haversine_km(lat, lon, p["lat"], p["lon"])
-                    if d < best_dist:
-                        best = p
-                        best_dist = d
+        search_steps = {self.grid_step, 0.05, 0.1, 0.5}  # all possible grid steps
+        for step in search_steps:
+            for dlat_mult in range(-2, 3):
+                for dlon_mult in range(-2, 3):
+                    adj_key = self._grid_key(lat + dlat_mult * step, lon + dlon_mult * step)
+                    if adj_key in self.grid_index:
+                        p = self.grid_index[adj_key]
+                        d = self._haversine_km(lat, lon, p["lat"], p["lon"])
+                        if d < best_dist:
+                            best = p
+                            best_dist = d
 
         if best and best_dist <= max_distance_km:
             result = best.copy()

@@ -2054,6 +2054,63 @@ async def advisory(req: AdvisoryRequest):
         raise HTTPException(500, f"Advisory pipeline failed: {str(e)}")
 
 
+async def _background_refine_satellite(lat: float, lon: float):
+    """Background task: fetch exact satellite data from live Earth Engine,
+    persist to GCS for future lookups. Called when cache hit is coarse (>5km)."""
+    try:
+        log.info(f"Background satellite refinement starting for ({lat}, {lon})")
+
+        # Compute live data
+        ndvi_result = await fetch_ndvi(lat, lon)
+        extras_result = await fetch_satellite_extras(lat, lon)
+
+        # Persist to GCS so it survives redeployment
+        refined_data = {
+            "lat": round(lat, 4),
+            "lon": round(lon, 4),
+            "ndvi": ndvi_result.get("ndvi") if ndvi_result else None,
+            "evi": ndvi_result.get("evi") if ndvi_result else None,
+            "ndwi": ndvi_result.get("ndwi") if ndvi_result else None,
+            "health": ndvi_result.get("health", "").lower() if ndvi_result else None,
+            "image_date": ndvi_result.get("image_date") if ndvi_result else None,
+        }
+
+        # Add SAR data
+        if extras_result.get("sar"):
+            sar = extras_result["sar"]
+            refined_data["vv_db"] = sar.get("vv_backscatter_db")
+            refined_data["vh_db"] = sar.get("vh_backscatter_db")
+            refined_data["moisture"] = sar.get("moisture_class")
+
+        # Add LST data
+        if extras_result.get("lst"):
+            lst = extras_result["lst"]
+            refined_data["lst_day_c"] = lst.get("lst_day_celsius")
+            refined_data["lst_night_c"] = lst.get("lst_night_celsius")
+            refined_data["heat_stress"] = lst.get("heat_stress")
+
+        # Add SMAP data
+        if extras_result.get("smap"):
+            smap = extras_result["smap"]
+            refined_data["sm_surface"] = smap.get("surface_moisture_m3m3")
+            refined_data["sm_rootzone"] = smap.get("rootzone_moisture_m3m3")
+            refined_data["rootzone_class"] = smap.get("rootzone_class")
+
+        # Persist to GCS (survives redeployment)
+        gcs_key = f"sat_refined:{round(lat, 3)}:{round(lon, 3)}"
+        await _gcs_set(gcs_key, refined_data)
+
+        # Also update local in-memory cache for immediate next lookup
+        cache_key = _sat_cache._grid_key(lat, lon)
+        _sat_cache.grid_index[cache_key] = refined_data
+        _sat_cache.points.append(refined_data)
+
+        log.info(f"Background satellite refinement done for ({lat}, {lon}) — persisted to GCS + local cache")
+
+    except Exception as e:
+        log.warning(f"Background satellite refinement failed for ({lat}, {lon}): {e}")
+
+
 async def _run_advisory(req: AdvisoryRequest):
     crop = req.crop
 
@@ -2088,7 +2145,13 @@ async def _run_advisory(req: AdvisoryRequest):
             ndvi_data = cached_sat.get("ndvi_data")
             satellite_extras = cached_sat.get("satellite_extras", {})
             sat_from_cache = True
-            log.info(f"Satellite data from local cache ({cached_sat.get('cache_distance_km', 0):.1f}km, computed {cached_sat.get('computed_at', '?')})")
+            cache_dist = cached_sat.get("cache_distance_km", 0)
+            log.info(f"Satellite data from local cache ({cache_dist:.1f}km, computed {cached_sat.get('computed_at', '?')})")
+
+            # If cached data is coarse (>5km from exact location), launch background
+            # live EE refinement and persist to GCS for future exact lookups
+            if cache_dist > 5.0:
+                asyncio.create_task(_background_refine_satellite(req.latitude, req.longitude))
 
     # 1. Geocode + weather + KVK + historical weather — ALL PARALLEL
     #    Only launch live EE tasks if cache missed

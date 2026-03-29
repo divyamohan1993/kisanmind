@@ -82,6 +82,22 @@ DEMO_REGIONS = {
     "shimla": {"lat": 31.10, "lon": 77.17, "radius_km": 20},
 }
 
+# Hackathon reviewer office locations — compute at 0.05° for instant demo
+REVIEWER_LOCATIONS = {
+    # Unstop HQ — Bhikaji Cama Place, New Delhi
+    "unstop_delhi": {"lat": 28.5672, "lon": 77.1856, "radius_km": 10},
+    # Avataar.ai — Vaishnavi Tech Park, Bellandur, Bangalore
+    "avataar_bangalore": {"lat": 12.9279, "lon": 77.6789, "radius_km": 10},
+    # Economic Times — CST Fort, Mumbai
+    "et_mumbai": {"lat": 18.9398, "lon": 72.8354, "radius_km": 10},
+    # Economic Times — ITO, Delhi
+    "et_delhi": {"lat": 28.6273, "lon": 77.2457, "radius_km": 10},
+    # Economic Times — Gurgaon office
+    "et_gurgaon": {"lat": 28.4957, "lon": 77.0634, "radius_km": 10},
+    # ET Bangalore office
+    "et_bangalore": {"lat": 12.9716, "lon": 77.5946, "radius_km": 10},
+}
+
 
 def generate_grid(step: float = 0.1, bounds: dict = None) -> list[tuple[float, float]]:
     """Generate lat/lon grid covering India at given step size."""
