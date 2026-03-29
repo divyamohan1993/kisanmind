@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://kisanmind.dmj.one"><img src="https://img.shields.io/badge/Live_App-kisanmind.dmj.one-22c55e?style=for-the-badge&logo=phone&logoColor=white" alt="Live App" /></a>
-  <a href="https://kisanmind-api-409924770511.asia-south1.run.app/api/health"><img src="https://img.shields.io/badge/API_Health-Check-38bdf8?style=for-the-badge&logo=fastapi&logoColor=white" alt="API Health" /></a>
+  <a href="https://kisanmind.dmj.one/api/health"><img src="https://img.shields.io/badge/API_Health-Check-38bdf8?style=for-the-badge&logo=fastapi&logoColor=white" alt="API Health" /></a>
 </p>
 
 ---

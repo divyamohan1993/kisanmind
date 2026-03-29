@@ -3,7 +3,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install
 COPY . .
-ENV NEXT_PUBLIC_API_URL=https://kisanmind-api-409924770511.asia-south1.run.app
+ENV NEXT_PUBLIC_API_URL=https://kisanmind.dmj.one
 RUN npm run build
 
 FROM node:22-alpine AS runner

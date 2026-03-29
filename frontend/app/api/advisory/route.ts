@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.BACKEND_URL ||
-  "https://kisanmind-api-409924770511.asia-south1.run.app";
+  "https://kisanmind.dmj.one";
 
 /* ------------------------------------------------------------------ */
 /*  POST handler — proxy to the real backend                           */

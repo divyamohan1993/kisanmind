@@ -3193,7 +3193,7 @@ async def summarize_advisory(req: SummarizeRequest):
 _call_sessions: dict[str, dict] = {}  # {phone_number: {crop, lat, lon, state, language, last_advisory, last_advisory_data, timestamp}}
 _CALL_SESSION_TTL = 7 * 24 * 60 * 60  # 7 days for returning caller recognition
 
-BASE_URL = os.getenv("BASE_URL", "https://kisanmind-api-409924770511.asia-south1.run.app")
+BASE_URL = os.getenv("BASE_URL", "https://kisanmind.dmj.one")
 
 
 async def _send_sms_summary(to_number: str, advisory_data: dict, language: str = "hi"):
