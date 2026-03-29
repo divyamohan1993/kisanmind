@@ -2979,7 +2979,7 @@ After fetch_farm_data returns, give a CONCISE advisory in 4-5 short sentences ma
 2. Soil/water status — one line
 3. Weather alert with specific dates — one line
 4. Best mandi with price and net profit after transport — one line
-5. KVK helpline: 1800-180-1551 — one line
+5. Nearest KVK — name and distance (from data), plus helpline 1800-180-1551
 
 DO NOT write paragraphs. DO NOT repeat information. DO NOT over-explain satellite technology.
 Keep total response under 100 words.
