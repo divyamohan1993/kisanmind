@@ -10,8 +10,15 @@ cd /app
 PYTHONPATH=/app python -m uvicorn backend.main:app --host 0.0.0.0 --port 8081 &
 BACKEND_PID=$!
 
-# Wait a moment for backend to be ready
-sleep 2
+# Wait for backend to be ready (poll health endpoint)
+echo "Waiting for backend to start..."
+for i in $(seq 1 30); do
+    if curl -sf http://localhost:8081/api/health > /dev/null 2>&1; then
+        echo "Backend ready on :8081 (took ${i}s)"
+        break
+    fi
+    sleep 1
+done
 
 # Start the Next.js frontend on port 8080 (Cloud Run's exposed port)
 cd /app/frontend
