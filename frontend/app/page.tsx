@@ -128,27 +128,9 @@ export default function TalkPage() {
       addMsg("farmer", transcript, "conversation", transcript);
       setCallState("processing");
 
-      // Speak trivia on first data fetch
-      let triviaDone = false;
-      if (!advisoryDeliveredRef.current) {
-        (async () => {
-          try {
-            const tr = await fetch(`${API_BASE}/api/trivia`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ crop: transcript, language: lang() }) });
-            const td = await tr.json();
-            for (const fact of (td.trivia || [])) {
-              if (triviaDone || !callActiveRef.current) break;
-              setCallState("speaking"); addMsg("kisanmind", fact, "status", fact);
-              const fa = await playTTS(fact, lang()); currentAudioRef.current = fa; await waitForAudioEnd(fa);
-            }
-          } catch {}
-        })();
-      }
-
       try {
         const cr = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: transcript, language: lang(), latitude: lat(), longitude: lon() }) });
-        triviaDone = true; const cd = await cr.json();
-        // Stop any filler/trivia audio before playing the real response
-        if (currentAudioRef.current) { currentAudioRef.current.pause(); currentAudioRef.current.currentTime = 0; currentAudioRef.current = null; }
+        const cd = await cr.json();
         setCallState("speaking");
         const clean = stripMarkdown(cd.response); const cleanEn = stripMarkdown(cd.response_en || cd.response);
         const kind = cd.has_advisory ? "advisory" : "conversation";
@@ -157,7 +139,7 @@ export default function TalkPage() {
         if (cd.has_advisory) { try { const b = await fetch(`${API_BASE}/api/beep`); if (b.ok) { const bd = await b.json(); const beep = new Audio(`data:audio/wav;base64,${bd.audio_base64}`); await beep.play(); await waitForAudioEnd(beep); } } catch {} }
         const ra = await playTTS(clean, lang()); currentAudioRef.current = ra; await waitForAudioEnd(ra);
         if (cd.call_complete) { callActiveRef.current = false; setCallState("ended"); return; }
-      } catch { triviaDone = true; addMsg("kisanmind", "Technical issue.", "status", "Technical issue."); }
+      } catch { addMsg("kisanmind", "Technical issue.", "status", "Technical issue."); }
     }
   }, [listenOnce, addMsg]);
 

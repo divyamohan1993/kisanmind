@@ -3104,7 +3104,7 @@ async def text_chat(req: ChatRequest):
                             config=types.GenerateContentConfig(
                                 system_instruction=CHAT_SYSTEM_PROMPT + f"\n\n{location_note}\n{lang_note}",
                             ),
-                            use_pro=True,
+                            use_pro=False,
                         ),
                     )
                     response_text = response2.text.strip()
