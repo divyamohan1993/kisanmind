@@ -4,7 +4,17 @@
   <img src="https://img.shields.io/badge/Status-Live-22c55e?style=for-the-badge" alt="Live" />
 </p>
 
-<h1 align="center">KisanMind (किसानमाइंड)</h1>
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white" />
+  <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat-square&logo=fastapi&logoColor=white" />
+  <img src="https://img.shields.io/badge/Gemini-3.1_Flash-4285F4?style=flat-square&logo=google&logoColor=white" />
+  <img src="https://img.shields.io/badge/Earth_Engine-Sentinel--2-FF6F00?style=flat-square&logo=google-earth&logoColor=white" />
+  <img src="https://img.shields.io/badge/Languages-22-138808?style=flat-square" />
+  <img src="https://img.shields.io/github/license/divyamohan1993/kisanmind?style=flat-square" />
+</p>
+
+<h1 align="center">🌾 KisanMind (किसानमाइंड)</h1>
 <h3 align="center">Satellite-to-Voice Agricultural Intelligence for 150M Indian Farmers</h3>
 
 <p align="center">

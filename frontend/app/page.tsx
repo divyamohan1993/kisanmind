@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Phone, PhoneOff, Mic, Volume2 } from "lucide-react";
-import useGeolocation from "./hooks/useGeolocation";
+import useGeolocation from "./useGeolocation";
 
 const LANGUAGES = [
   { code: "hi", label: "हिन्दी" }, { code: "en", label: "English" },
