@@ -29,10 +29,12 @@ const iconMap = {
 
 interface WeatherTimelineProps {
   forecast?: ForecastDay[];
+  growthStage?: string;
 }
 
 export default function WeatherTimeline({
   forecast,
+  growthStage,
 }: WeatherTimelineProps) {
   if (!forecast || forecast.length === 0) {
     return (
@@ -43,6 +45,12 @@ export default function WeatherTimeline({
   }
 
   return (
+    <div>
+      {growthStage && (
+        <div className="mb-3 rounded-lg bg-white/5 px-3 py-2 text-xs font-medium text-white/70">
+          Crop Stage: <span className="text-white/90">{growthStage}</span>
+        </div>
+      )}
     <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin">
       {forecast.map((day, i) => {
         // Support both prop name conventions
@@ -110,14 +118,23 @@ export default function WeatherTimeline({
               </div>
             </div>
 
-            {hasAlert && (
-              <div className="mt-1 w-full rounded-lg bg-moderate/10 px-2 py-1.5 text-[10px] font-medium text-moderate">
-                ⚠ {day.alert}
-              </div>
-            )}
+            {hasAlert && (() => {
+              const alertLower = (day.alert ?? "").toLowerCase();
+              const isCritical = alertLower.includes("harvest") || alertLower.includes("frost");
+              return (
+                <div className={`mt-1 w-full rounded-lg px-2 py-1.5 text-[10px] font-medium ${
+                  isCritical
+                    ? "bg-red-500/15 text-red-400 border border-red-500/20"
+                    : "bg-moderate/10 text-moderate"
+                }`}>
+                  {isCritical ? "\u{1F6A8}" : "\u26A0"} {day.alert}
+                </div>
+              );
+            })()}
           </div>
         );
       })}
+    </div>
     </div>
   );
 }

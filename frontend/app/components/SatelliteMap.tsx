@@ -7,6 +7,11 @@ interface SatelliteMapProps {
   ndvi?: number;
   status?: "healthy" | "moderate" | "stressed";
   imageUrl?: string;
+  imageDate?: string;
+  trend?: string;
+  trajectoryLabel?: string;
+  sarMoisture?: string;
+  lstTemp?: number;
 }
 
 export default function SatelliteMap({
@@ -14,6 +19,11 @@ export default function SatelliteMap({
   ndvi,
   status,
   imageUrl,
+  imageDate,
+  trend,
+  trajectoryLabel,
+  sarMoisture,
+  lstTemp,
 }: SatelliteMapProps) {
   if (!location && !imageUrl && ndvi == null) {
     return (
@@ -65,10 +75,65 @@ export default function SatelliteMap({
         )}
 
         {/* Corner coordinates display */}
-        <div className="absolute left-3 top-3 flex items-center gap-1.5 rounded-lg bg-black/60 px-2.5 py-1.5 text-[10px] font-mono text-white/60 backdrop-blur-sm">
-          <Satellite size={12} className="text-satellite" />
-          Sentinel-2 | 10m res
+        <div className="absolute left-3 top-3 flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5 rounded-lg bg-black/60 px-2.5 py-1.5 text-[10px] font-mono text-white/60 backdrop-blur-sm">
+            <Satellite size={12} className="text-satellite" />
+            Sentinel-2 | 10m res
+          </div>
+          {imageDate && (
+            <div className="rounded-lg bg-black/60 px-2.5 py-1.5 text-[10px] font-mono text-white/60 backdrop-blur-sm">
+              Image: {imageDate}{" "}
+              <span className="text-white/40">
+                ({(() => {
+                  const diff = Math.round((Date.now() - new Date(imageDate).getTime()) / 86400000);
+                  return diff === 0 ? "today" : diff === 1 ? "1 day ago" : `${diff} days ago`;
+                })()})
+              </span>
+            </div>
+          )}
         </div>
+
+        {/* Trend / trajectory overlay */}
+        {(trend || trajectoryLabel) && (
+          <div className="absolute right-3 top-3 flex flex-col items-end gap-1.5">
+            {trend && (
+              <div className="rounded-lg bg-black/60 px-2.5 py-1.5 text-[10px] font-medium text-white/70 backdrop-blur-sm">
+                Trend: {trend}
+              </div>
+            )}
+            {trajectoryLabel && (
+              <div className="rounded-lg bg-black/60 px-2.5 py-1.5 text-[10px] font-medium text-white/70 backdrop-blur-sm">
+                {trajectoryLabel}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SAR moisture + LST badges */}
+        {(sarMoisture || lstTemp != null) && (
+          <div className="absolute left-3 bottom-14 flex flex-col gap-1.5">
+            {sarMoisture && (
+              <div className={`rounded-lg px-2.5 py-1.5 text-[10px] font-medium backdrop-blur-sm ${
+                sarMoisture.toLowerCase().includes("moist")
+                  ? "bg-sky-500/20 text-sky-300 border border-sky-400/30"
+                  : "bg-amber-500/20 text-amber-300 border border-amber-400/30"
+              }`}>
+                Radar: {sarMoisture}
+              </div>
+            )}
+            {lstTemp != null && (
+              <div className={`rounded-lg px-2.5 py-1.5 text-[10px] font-medium backdrop-blur-sm ${
+                lstTemp > 40
+                  ? "bg-red-500/20 text-red-300 border border-red-400/30"
+                  : lstTemp > 30
+                  ? "bg-amber-500/20 text-amber-300 border border-amber-400/30"
+                  : "bg-sky-500/20 text-sky-300 border border-sky-400/30"
+              }`}>
+                Surface: {lstTemp}&deg;C
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Location pin */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">

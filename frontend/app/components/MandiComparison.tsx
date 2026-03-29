@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
   Cell,
   ReferenceLine,
+  LabelList,
 } from "recharts";
 
 interface MandiComparisonProps {
@@ -20,6 +21,7 @@ interface MandiComparisonProps {
     transport: number;
     commission: number;
     distance: number;
+    spoilage?: number; // Rs per quintal
   }>;
 }
 
@@ -89,10 +91,28 @@ export default function MandiComparison({
                 fontSize: "12px",
                 color: "#e6edf3",
               }}
-              formatter={(value, name) => [
-                `₹${value}`,
-                name === "netProfit" ? "Net Profit" : String(name),
-              ]}
+              content={({ active, payload }) => {
+                if (!active || !payload || !payload.length) return null;
+                const entry = payload[0]?.payload;
+                return (
+                  <div style={{
+                    background: "rgba(13,17,23,0.95)",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    borderRadius: "12px",
+                    fontSize: "12px",
+                    color: "#e6edf3",
+                    padding: "8px 12px",
+                  }}>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{entry.name}</div>
+                    <div>Net Profit: ₹{entry.netProfit}</div>
+                    {entry.spoilage != null && entry.spoilage > 0 && (
+                      <div style={{ color: "#ef4444", marginTop: 2 }}>
+                        Spoilage Loss: ₹{entry.spoilage}/q
+                      </div>
+                    )}
+                  </div>
+                );
+              }}
             />
             <Bar dataKey="netProfit" radius={[0, 6, 6, 0]} barSize={28}>
               {sorted.map((entry) => (
@@ -105,6 +125,24 @@ export default function MandiComparison({
                   }
                 />
               ))}
+              <LabelList
+                dataKey="spoilage"
+                position="right"
+                content={(props) => {
+                  const { x, y, width, height, value } = props as Record<string, number>;
+                  if (!value || value <= 50) return <></>;
+                  return (
+                    <circle
+                      cx={(x ?? 0) + (width ?? 0) + 8}
+                      cy={(y ?? 0) + (height ?? 0) / 2}
+                      r={4}
+                      fill="#ef4444"
+                      stroke="#0d1117"
+                      strokeWidth={1}
+                    />
+                  );
+                }}
+              />
             </Bar>
           </BarChart>
         </ResponsiveContainer>

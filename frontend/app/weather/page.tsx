@@ -4,12 +4,32 @@ import { useState, useEffect, useCallback } from "react";
 import WeatherTimeline from "../components/WeatherTimeline";
 import AdvisoryCard from "../components/AdvisoryCard";
 import useGeolocation from "../hooks/useGeolocation";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, AlertTriangle, Phone, MapPin, Sprout } from "lucide-react";
 
 import type { ForecastDay } from "../components/WeatherTimeline";
 import type { Advisory } from "../components/AdvisoryCard";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+
+interface GrowthStage {
+  stage_name?: string;
+  day_number?: number;
+  total_days?: number;
+  description?: string;
+}
+
+interface CrossValidation {
+  warnings?: string[];
+  flags?: string[];
+  confidence?: string;
+}
+
+interface NearestKVK {
+  name?: string;
+  distance_km?: number;
+  phone?: string;
+  district?: string;
+}
 
 interface ApiResponse {
   crop?: string;
@@ -28,6 +48,9 @@ interface ApiResponse {
   };
   advisory?: string;
   error?: string;
+  growth_stage?: GrowthStage;
+  cross_validation?: CrossValidation;
+  nearest_kvk?: NearestKVK;
 }
 
 const CROPS = ["Tomato", "Wheat", "Rice", "Apple", "Coffee"];
@@ -185,6 +208,62 @@ export default function WeatherPage() {
           </div>
         )}
 
+        {/* Cross-Validation Weather Alerts */}
+        {!isLoading && apiData?.cross_validation && (() => {
+          const allAlerts = [
+            ...(apiData.cross_validation.warnings || []),
+            ...(apiData.cross_validation.flags || []),
+          ];
+          if (allAlerts.length === 0) return null;
+          return (
+            <div className="space-y-2">
+              {allAlerts.map((alert, i) => (
+                <div key={i} className="flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
+                  <AlertTriangle size={18} className="shrink-0" />
+                  <span>{alert.replace(/_/g, " ")}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
+        {/* Growth Stage */}
+        {!isLoading && apiData?.growth_stage && (
+          <div className="bg-gradient-to-r from-lime-500/15 to-emerald-600/15 border border-lime-500/30 rounded-2xl p-5">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-lime-500/20">
+                <Sprout size={22} className="text-lime-400" />
+              </div>
+              <div>
+                <p className="text-xs text-white/50 uppercase tracking-wider">Crop Stage</p>
+                <p className="text-xl font-bold text-lime-300">
+                  {apiData.growth_stage.stage_name || "Unknown"}
+                  {apiData.growth_stage.day_number != null && (
+                    <span className="text-base font-normal text-white/50 ml-2">(Day {apiData.growth_stage.day_number})</span>
+                  )}
+                </p>
+              </div>
+            </div>
+            {apiData.growth_stage.description && (
+              <p className="text-sm text-white/60 mb-3">{apiData.growth_stage.description}</p>
+            )}
+            {apiData.growth_stage.day_number != null && apiData.growth_stage.total_days != null && apiData.growth_stage.total_days > 0 && (
+              <div className="mt-2">
+                <div className="flex justify-between text-xs text-white/40 mb-1">
+                  <span>Day {apiData.growth_stage.day_number}</span>
+                  <span>{apiData.growth_stage.total_days} days total</span>
+                </div>
+                <div className="w-full h-2.5 rounded-full bg-white/10">
+                  <div
+                    className="h-2.5 rounded-full bg-gradient-to-r from-lime-500 to-emerald-400 transition-all"
+                    style={{ width: `${Math.min(100, (apiData.growth_stage.day_number / apiData.growth_stage.total_days) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Weather Summary Banner */}
         {isLoading ? (
           <div className="h-28 rounded-2xl shimmer" />
@@ -272,6 +351,41 @@ export default function WeatherPage() {
             </div>
           </div>
         </div>
+
+        {/* Nearest KVK */}
+        {apiData?.nearest_kvk && (
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-500/20">
+                <MapPin size={20} className="text-sky-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold">Nearest KVK</h3>
+                <p className="text-xs text-white/40">Krishi Vigyan Kendra</p>
+              </div>
+            </div>
+            <div className="space-y-2 text-sm">
+              {apiData.nearest_kvk.name && (
+                <p className="text-white/90 font-medium">{apiData.nearest_kvk.name}</p>
+              )}
+              {apiData.nearest_kvk.district && (
+                <p className="text-white/50">District: {apiData.nearest_kvk.district}</p>
+              )}
+              {apiData.nearest_kvk.distance_km != null && (
+                <p className="text-white/50">{apiData.nearest_kvk.distance_km} km away</p>
+              )}
+              {apiData.nearest_kvk.phone && (
+                <a
+                  href={`tel:${apiData.nearest_kvk.phone}`}
+                  className="inline-flex items-center gap-2 mt-2 rounded-lg bg-sky-500/20 border border-sky-500/30 px-4 py-2 text-sky-400 hover:bg-sky-500/30 transition"
+                >
+                  <Phone size={14} />
+                  {apiData.nearest_kvk.phone}
+                </a>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Source */}
         <p className="text-xs text-white/30 text-center">

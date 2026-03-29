@@ -15,9 +15,12 @@ import {
 
 interface NDVIChartProps {
   data?: Array<{ date: string; ndvi: number; stage?: string }>;
+  trajectory?: string;
+  benchmarkComparison?: string;
+  districtAvg?: number;
 }
 
-export default function NDVIChart({ data }: NDVIChartProps) {
+export default function NDVIChart({ data, trajectory, benchmarkComparison, districtAvg }: NDVIChartProps) {
   if (!data || data.length === 0) {
     return (
       <div className="glass-card p-4 sm:p-6">
@@ -36,6 +39,17 @@ export default function NDVIChart({ data }: NDVIChartProps) {
           <h3 className="text-sm font-semibold text-white/90">NDVI Trend</h3>
           <p className="text-xs text-white/40">3-month vegetation index</p>
         </div>
+        {trajectory && (
+          <div className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+            trajectory.toLowerCase().includes("improv") ? "bg-healthy/10 text-healthy" :
+            trajectory.toLowerCase().includes("declin") ? "bg-stressed/10 text-stressed" :
+            "bg-moderate/10 text-moderate"
+          }`}>
+            {trajectory.toLowerCase().includes("improv") ? "\u2191" :
+             trajectory.toLowerCase().includes("declin") ? "\u2193" : "\u2192"}{" "}
+            {trajectory}
+          </div>
+        )}
         <div className="flex items-center gap-3 text-[10px]">
           <span className="flex items-center gap-1">
             <span className="inline-block h-2 w-2 rounded-full bg-healthy" />
@@ -105,6 +119,19 @@ export default function NDVIChart({ data }: NDVIChartProps) {
                 fontSize: 10,
               }}
             />
+            {districtAvg != null && (
+              <ReferenceLine
+                y={districtAvg}
+                stroke="rgba(168,85,247,0.6)"
+                strokeDasharray="4 4"
+                label={{
+                  value: `Dist. Avg (${districtAvg.toFixed(2)})`,
+                  position: "left",
+                  fill: "rgba(168,85,247,0.7)",
+                  fontSize: 10,
+                }}
+              />
+            )}
             <Area
               type="monotone"
               dataKey="ndvi"
@@ -122,6 +149,9 @@ export default function NDVIChart({ data }: NDVIChartProps) {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+      {benchmarkComparison && (
+        <p className="mt-3 text-xs text-white/50">{benchmarkComparison}</p>
+      )}
     </div>
   );
 }

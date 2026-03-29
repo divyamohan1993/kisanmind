@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import {
   Play, Loader2, MapPin, TrendingUp, CloudRain, Sun, Cloud, Satellite,
   Phone, Shield, Globe, Leaf, Volume2, CheckCircle, ChevronRight,
-  Thermometer, Droplets,
+  Thermometer, Droplets, ShieldCheck, Info, Activity, Radio,
 } from "lucide-react";
 import Link from "next/link";
 import useGeolocation from "../hooks/useGeolocation";
@@ -42,6 +42,42 @@ interface ApiData {
   advisory: string;
   satellite?: { ndvi: number; evi: number; ndwi: number; health: string; trend: string; image_date: string; source: string };
   sources: Record<string, string>;
+  price_trend?: {
+    direction?: string;
+    percentage?: number;
+    period_days?: number;
+  };
+  growth_stage?: {
+    stage?: string;
+    days_since_sowing?: number;
+    confidence?: string;
+  };
+  confidence?: string;
+  nearest_kvk?: {
+    name?: string;
+    distance_km?: number;
+    phone?: string;
+    district?: string;
+  };
+  cross_validation?: Array<{
+    type: string;
+    message: string;
+    source?: string;
+  }>;
+  satellite_extras?: {
+    sar?: {
+      moisture_class?: string;
+      backscatter_db?: number;
+    };
+    lst?: {
+      surface_temp_c?: number;
+      heat_stress?: string;
+    };
+    smap?: {
+      rootzone_class?: string;
+      soil_moisture?: number;
+    };
+  };
 }
 
 type DemoStep =
@@ -87,6 +123,11 @@ const VALUE_POINTS = [
   { icon: Phone, label: "2G Voice Call", detail: "Works on any phone via Twilio webhook" },
   { icon: Shield, label: "Compliance Guardrails", detail: "No pesticide brands, data citations, disclaimers" },
   { icon: Volume2, label: "Gemini 3.1 Pro", detail: "Conversational advisory in farmer's language" },
+  { icon: Radio, label: "SAR Soil Moisture", detail: "Sentinel-1 C-band radar soil wetness" },
+  { icon: Thermometer, label: "MODIS LST", detail: "Land surface temperature + heat stress" },
+  { icon: Droplets, label: "SMAP Root Zone", detail: "NASA soil moisture active-passive data" },
+  { icon: ShieldCheck, label: "Cross-Validation", detail: "Multi-source conflict detection engine" },
+  { icon: Activity, label: "Historical GDD", detail: "Growth stage via accumulated degree days" },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -322,6 +363,18 @@ export default function DemoPage() {
                 <div className="flex items-center gap-3 mb-3">
                   <Satellite size={20} className="text-emerald-400" />
                   <h3 className="font-bold text-lg">Satellite Crop Health (Real Sentinel-2)</h3>
+                  {data.growth_stage?.stage && (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-[10px] font-semibold text-emerald-400">
+                      <Leaf size={10} />
+                      {data.growth_stage.stage}
+                      {data.growth_stage.days_since_sowing != null && <span className="text-white/40 ml-0.5">Day {data.growth_stage.days_since_sowing}</span>}
+                      {data.growth_stage.confidence && (
+                        <span className={`font-bold ml-0.5 ${data.growth_stage.confidence === "HIGH" ? "text-emerald-400" : data.growth_stage.confidence === "MEDIUM" ? "text-yellow-400" : "text-red-400"}`}>
+                          {data.growth_stage.confidence}
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                   <div>
@@ -337,6 +390,36 @@ export default function DemoPage() {
                     <div className="text-xs text-white/30">{data.satellite.source}</div>
                   </div>
                 </div>
+                {/* Satellite Extras */}
+                {data.satellite_extras && (
+                  <div className="mt-3 flex flex-wrap gap-2 pt-3 border-t border-white/5">
+                    {data.satellite_extras.sar?.moisture_class && (
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border ${
+                        data.satellite_extras.sar.moisture_class.toLowerCase().includes("moist") || data.satellite_extras.sar.moisture_class.toLowerCase().includes("wet")
+                          ? "bg-sky-500/10 border-sky-500/20 text-sky-400" : "bg-amber-500/10 border-amber-500/20 text-amber-400"
+                      }`}>
+                        <Radio size={12} />
+                        SAR Soil: {data.satellite_extras.sar.moisture_class}
+                      </span>
+                    )}
+                    {data.satellite_extras.lst?.surface_temp_c != null && (
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border ${
+                        data.satellite_extras.lst.heat_stress === "high" || data.satellite_extras.lst.heat_stress === "extreme"
+                          ? "bg-red-500/10 border-red-500/20 text-red-400" : "bg-amber-500/10 border-amber-500/20 text-amber-400"
+                      }`}>
+                        <Thermometer size={12} />
+                        Surface: {data.satellite_extras.lst.surface_temp_c}°C
+                        {data.satellite_extras.lst.heat_stress && ` (${data.satellite_extras.lst.heat_stress})`}
+                      </span>
+                    )}
+                    {data.satellite_extras.smap?.rootzone_class && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border bg-sky-500/10 border-sky-500/20 text-sky-400">
+                        <Droplets size={12} />
+                        Root Zone: {data.satellite_extras.smap.rootzone_class}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -345,6 +428,17 @@ export default function DemoPage() {
               <div className="flex items-center gap-3 mb-3">
                 <TrendingUp size={20} className="text-yellow-400" />
                 <h3 className="font-bold text-lg">Best Mandi (Real AgMarkNet Prices)</h3>
+                {data.price_trend?.direction && (
+                  <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold ${
+                    data.price_trend.direction === "rising" ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400" :
+                    data.price_trend.direction === "falling" ? "bg-red-500/10 border border-red-500/20 text-red-400" :
+                    "bg-white/5 border border-white/10 text-white/50"
+                  }`}>
+                    {data.price_trend.direction === "rising" ? "↑" : data.price_trend.direction === "falling" ? "↓" : "→"}
+                    {" "}{data.price_trend.direction}
+                    {data.price_trend.percentage != null && ` ${data.price_trend.percentage.toFixed(1)}%`}
+                  </span>
+                )}
               </div>
               <div className="flex items-end gap-4 mb-3">
                 <div>
@@ -422,6 +516,16 @@ export default function DemoPage() {
               <div className="flex items-center gap-3 mb-3">
                 <Volume2 size={20} className="text-emerald-400" />
                 <h3 className="font-bold text-lg">Gemini 3.1 Pro Advisory (Hindi)</h3>
+                {data.confidence && (
+                  <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+                    data.confidence === "HIGH" ? "bg-emerald-500/15 border border-emerald-500/25 text-emerald-400" :
+                    data.confidence === "MEDIUM" ? "bg-yellow-500/15 border border-yellow-500/25 text-yellow-400" :
+                    "bg-red-500/15 border border-red-500/25 text-red-400"
+                  }`}>
+                    <ShieldCheck size={10} />
+                    {data.confidence} Confidence
+                  </span>
+                )}
               </div>
               <div className="text-sm leading-relaxed text-white/80 whitespace-pre-wrap">
                 {data.advisory}
@@ -433,6 +537,60 @@ export default function DemoPage() {
                 <Volume2 size={14} /> Play again
               </button>
             </div>
+
+            {/* Cross-Validation Alerts */}
+            {data.cross_validation && data.cross_validation.length > 0 && (
+              <div className="space-y-2">
+                {data.cross_validation.map((cv, i) => {
+                  const colorMap: Record<string, string> = {
+                    WARNING: "border-amber-500/30 bg-amber-500/10 text-amber-400",
+                    CONFLICT: "border-red-500/30 bg-red-500/10 text-red-400",
+                    AGREEMENT: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+                    CAVEAT: "border-sky-500/30 bg-sky-500/10 text-sky-400",
+                  };
+                  const colors = colorMap[cv.type] || colorMap.CAVEAT;
+                  return (
+                    <div key={i} className={`flex items-start gap-3 rounded-xl border p-4 text-sm ${colors}`}>
+                      <Info size={16} className="mt-0.5 shrink-0" />
+                      <div>
+                        <span className="font-bold text-[10px] uppercase tracking-wider mr-2">{cv.type}</span>
+                        {cv.message}
+                        {cv.source && <span className="ml-1 text-[10px] opacity-60">({cv.source})</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Nearest KVK */}
+            {data.nearest_kvk?.name && (
+              <div className="glass-card p-5 border border-sky-500/10">
+                <div className="flex items-center gap-3 mb-3">
+                  <Phone size={20} className="text-sky-400" />
+                  <h3 className="font-bold text-lg">Nearest KVK (Krishi Vigyan Kendra)</h3>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <div className="font-semibold text-white/90">{data.nearest_kvk.name}</div>
+                    {data.nearest_kvk.district && <div className="text-xs text-white/40">{data.nearest_kvk.district}</div>}
+                    {data.nearest_kvk.distance_km != null && (
+                      <div className="text-xs text-white/40 mt-0.5">{data.nearest_kvk.distance_km.toFixed(1)} km away</div>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    {data.nearest_kvk.phone && (
+                      <div className="text-xs text-white/60">
+                        KVK: <a href={`tel:${data.nearest_kvk.phone}`} className="text-sky-400 underline">{data.nearest_kvk.phone}</a>
+                      </div>
+                    )}
+                    <div className="text-xs text-white/60">
+                      Kisan Helpline: <a href="tel:18001801551" className="text-sky-400 underline">1800-180-1551</a> (Toll Free)
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Data sources */}
             <div className="glass-card p-5">

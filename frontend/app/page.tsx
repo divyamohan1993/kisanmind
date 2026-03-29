@@ -9,6 +9,9 @@ import {
   Leaf,
   Search,
   AlertCircle,
+  Phone,
+  ShieldCheck,
+  Info,
 } from "lucide-react";
 import SatelliteMap from "./components/SatelliteMap";
 import NDVIChart from "./components/NDVIChart";
@@ -57,6 +60,52 @@ interface ApiResponse {
   advisory?: string;
   sources?: Record<string, unknown>;
   error?: string;
+  price_trend?: {
+    direction?: string;
+    percentage?: number;
+    period_days?: number;
+  };
+  growth_stage?: {
+    stage?: string;
+    days_since_sowing?: number;
+    confidence?: string;
+  };
+  confidence?: string;
+  nearest_kvk?: {
+    name?: string;
+    distance_km?: number;
+    phone?: string;
+    district?: string;
+  };
+  cross_validation?: Array<{
+    type: string;
+    message: string;
+    source?: string;
+  }>;
+  satellite_extras?: {
+    sar?: {
+      moisture_class?: string;
+      backscatter_db?: number;
+    };
+    lst?: {
+      surface_temp_c?: number;
+      heat_stress?: string;
+    };
+    smap?: {
+      rootzone_class?: string;
+      soil_moisture?: number;
+    };
+  };
+  ndvi_trajectory?: {
+    trajectory?: string;
+    benchmark_comparison?: string;
+  };
+  spoilage?: {
+    is_perishable?: boolean;
+    spoilage_loss_per_quintal?: number;
+    transit_hours?: number;
+    shelf_life_days?: number;
+  };
 }
 
 function mapApiToState(api: ApiResponse) {
@@ -152,6 +201,15 @@ function mapApiToState(api: ApiResponse) {
     combinedAdvisoryEn: api.advisory || "",
     mandiChartData,
     forecastDays,
+    // v2 fields
+    priceTrend: api.price_trend,
+    growthStage: api.growth_stage,
+    confidence: api.confidence,
+    nearestKvk: api.nearest_kvk,
+    crossValidation: api.cross_validation,
+    satelliteExtras: api.satellite_extras,
+    ndviTrajectory: api.ndvi_trajectory,
+    spoilage: api.spoilage,
   };
 }
 
@@ -409,6 +467,34 @@ export default function Dashboard() {
             imageUrl={data?.satellite.trueColorUrl}
           />
         )}
+        {/* Satellite Extras Pills */}
+        {data?.satelliteExtras && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {data.satelliteExtras.sar?.moisture_class && (
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border ${
+                data.satelliteExtras.sar.moisture_class.toLowerCase().includes("moist") || data.satelliteExtras.sar.moisture_class.toLowerCase().includes("wet")
+                  ? "bg-sky/10 border-sky/20 text-sky" : "bg-amber-500/10 border-amber-500/20 text-amber-400"
+              }`}>
+                <Satellite size={12} />
+                SAR Soil: {data.satelliteExtras.sar.moisture_class}
+              </span>
+            )}
+            {data.satelliteExtras.lst?.surface_temp_c != null && (
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border ${
+                data.satelliteExtras.lst.heat_stress === "high" || data.satelliteExtras.lst.heat_stress === "extreme"
+                  ? "bg-stressed/10 border-stressed/20 text-stressed" : "bg-moderate/10 border-moderate/20 text-moderate"
+              }`}>
+                Surface: {data.satelliteExtras.lst.surface_temp_c}°C
+                {data.satelliteExtras.lst.heat_stress && ` (${data.satelliteExtras.lst.heat_stress})`}
+              </span>
+            )}
+            {data.satelliteExtras.smap?.rootzone_class && (
+              <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border bg-sky/10 border-sky/20 text-sky">
+                Root Zone: {data.satelliteExtras.smap.rootzone_class}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Stat Cards */}
@@ -432,6 +518,26 @@ export default function Dashboard() {
               <div className="mt-1 text-xs capitalize text-white/50">
                 {data?.satellite.status || "--"} -- Trend: {data?.satellite.trend || "--"}
               </div>
+              {data?.ndviTrajectory?.trajectory && (
+                <div className="mt-1.5 text-[10px] text-white/40">
+                  Trajectory: <span className={`font-semibold ${data.ndviTrajectory.trajectory === "improving" ? "text-healthy" : data.ndviTrajectory.trajectory === "declining" ? "text-stressed" : "text-white/60"}`}>{data.ndviTrajectory.trajectory}</span>
+                  {data.ndviTrajectory.benchmark_comparison && <span className="ml-1">({data.ndviTrajectory.benchmark_comparison})</span>}
+                </div>
+              )}
+              {data?.growthStage?.stage && (
+                <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-healthy/10 border border-healthy/20 px-2.5 py-1">
+                  <Leaf size={10} className="text-healthy" />
+                  <span className="text-[10px] font-semibold text-healthy">{data.growthStage.stage}</span>
+                  {data.growthStage.days_since_sowing != null && (
+                    <span className="text-[10px] text-white/40">Day {data.growthStage.days_since_sowing}</span>
+                  )}
+                  {data.growthStage.confidence && (
+                    <span className={`text-[9px] font-bold ml-0.5 ${data.growthStage.confidence === "HIGH" ? "text-healthy" : data.growthStage.confidence === "MEDIUM" ? "text-moderate" : "text-stressed"}`}>
+                      {data.growthStage.confidence}
+                    </span>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
@@ -479,6 +585,23 @@ export default function Dashboard() {
               <div className="mt-1 text-xs text-white/50">
                 {data?.mandi.bestMandi || "--"} -- per quintal
               </div>
+              {data?.priceTrend?.direction && (
+                <div className={`mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold ${
+                  data.priceTrend.direction === "rising" ? "bg-healthy/10 border border-healthy/20 text-healthy" :
+                  data.priceTrend.direction === "falling" ? "bg-stressed/10 border border-stressed/20 text-stressed" :
+                  "bg-white/5 border border-white/10 text-white/50"
+                }`}>
+                  {data.priceTrend.direction === "rising" ? "↑" : data.priceTrend.direction === "falling" ? "↓" : "→"}
+                  {" "}{data.priceTrend.direction}
+                  {data.priceTrend.percentage != null && ` ${data.priceTrend.percentage.toFixed(1)}%`}
+                </div>
+              )}
+              {data?.spoilage?.is_perishable && (
+                <div className="mt-1.5 text-[10px] text-amber-400/70">
+                  {data.spoilage.spoilage_loss_per_quintal != null && <>Spoilage: ₹{data.spoilage.spoilage_loss_per_quintal}/qtl</>}
+                  {data.spoilage.transit_hours != null && <> -- Transit: {data.spoilage.transit_hours}h</>}
+                </div>
+              )}
             </>
           )}
         </div>
@@ -492,9 +615,21 @@ export default function Dashboard() {
       {/* Combined Advisory */}
       <div className="mb-8 glass-card p-5 sm:p-6 border border-healthy/10">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-bold text-white/90">
-            🌾 AI Advisory Summary
-          </h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-lg font-bold text-white/90">
+              🌾 AI Advisory Summary
+            </h2>
+            {data?.confidence && (
+              <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+                data.confidence === "HIGH" ? "bg-healthy/15 border border-healthy/25 text-healthy" :
+                data.confidence === "MEDIUM" ? "bg-moderate/15 border border-moderate/25 text-moderate" :
+                "bg-stressed/15 border border-stressed/25 text-stressed"
+              }`}>
+                <ShieldCheck size={10} />
+                {data.confidence} Confidence
+              </span>
+            )}
+          </div>
           <button
             onClick={() => setShowEnglish(!showEnglish)}
             className="rounded-lg bg-white/5 px-3 py-1.5 text-xs font-medium text-white/50 transition-colors hover:bg-white/10 hover:text-white/70"
@@ -514,6 +649,62 @@ export default function Dashboard() {
         )}
         {isLoading && <div className="mt-3 h-1 w-full shimmer rounded-full" />}
       </div>
+
+      {/* Cross-Validation Alerts */}
+      {data?.crossValidation && data.crossValidation.length > 0 && (
+        <div className="mb-8 space-y-2">
+          {data.crossValidation.map((cv, i) => {
+            const colorMap: Record<string, string> = {
+              WARNING: "border-amber-500/30 bg-amber-500/10 text-amber-400",
+              CONFLICT: "border-stressed/30 bg-stressed/10 text-stressed",
+              AGREEMENT: "border-healthy/30 bg-healthy/10 text-healthy",
+              CAVEAT: "border-sky/30 bg-sky/10 text-sky",
+            };
+            const colors = colorMap[cv.type] || colorMap.CAVEAT;
+            return (
+              <div key={i} className={`flex items-start gap-3 rounded-xl border p-4 text-sm ${colors}`}>
+                <Info size={16} className="mt-0.5 shrink-0" />
+                <div>
+                  <span className="font-bold text-[10px] uppercase tracking-wider mr-2">{cv.type}</span>
+                  {cv.message}
+                  {cv.source && <span className="ml-1 text-[10px] opacity-60">({cv.source})</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Nearest KVK Info Card */}
+      {data?.nearestKvk?.name && (
+        <div className="mb-8 glass-card p-5 border border-sky/10">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky/10">
+              <Phone size={16} className="text-sky" />
+            </div>
+            <h3 className="text-sm font-bold text-white/80">Nearest KVK (Krishi Vigyan Kendra)</h3>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <div>
+              <div className="font-semibold text-white/90">{data.nearestKvk.name}</div>
+              {data.nearestKvk.district && <div className="text-xs text-white/40">{data.nearestKvk.district}</div>}
+              {data.nearestKvk.distance_km != null && (
+                <div className="text-xs text-white/40 mt-0.5">{data.nearestKvk.distance_km.toFixed(1)} km away</div>
+              )}
+            </div>
+            <div className="space-y-1">
+              {data.nearestKvk.phone && (
+                <div className="text-xs text-white/60">
+                  KVK: <a href={`tel:${data.nearestKvk.phone}`} className="text-sky underline">{data.nearestKvk.phone}</a>
+                </div>
+              )}
+              <div className="text-xs text-white/60">
+                Kisan Helpline: <a href="tel:18001801551" className="text-sky underline">1800-180-1551</a> (Toll Free)
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Charts Grid */}
       <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Mic, Phone, PhoneOff, Sun, CloudRain, Cloud, Leaf, Volume2, TrendingUp, MapPin, Thermometer, CheckCircle, Droplets } from "lucide-react";
+import { Mic, Phone, PhoneOff, Sun, CloudRain, Cloud, Leaf, Volume2, TrendingUp, MapPin, Thermometer, CheckCircle, Droplets, AlertTriangle, Sprout, Shield, Satellite } from "lucide-react";
 import Link from "next/link";
 import useGeolocation from "../hooks/useGeolocation";
 
@@ -89,6 +89,12 @@ interface CallSummary {
   advisory?: string;
   latitude?: number;
   longitude?: number;
+  nearest_kvk?: { name?: string; distance_km?: number; phone?: string; district?: string };
+  growth_stage?: { stage_name?: string; day_number?: number; total_days?: number; description?: string };
+  confidence?: string;
+  price_trend?: { direction?: string; percent_change?: number; period_days?: number };
+  satellite_extras?: { sar_soil_moisture?: string; lst_heat?: string; summary?: string };
+  cross_validation?: { warnings?: string[]; flags?: string[] };
 }
 
 type CallState = "pre-call" | "greeting" | "listening" | "processing" | "speaking" | "ended";
@@ -344,7 +350,8 @@ export default function TalkPage() {
     // Start advisory fetch in background
     setCallState("speaking");
     let advisoryDone = false;
-    let advisoryResult: Record<string, unknown> | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let advisoryResult: any = null;
 
     const advisoryPromise = fetch(`${API_BASE}/api/advisory`, {
       method: "POST",
@@ -411,6 +418,12 @@ export default function TalkPage() {
         advisory: advisoryText,
         latitude: geo.latitude || undefined,
         longitude: geo.longitude || undefined,
+        nearest_kvk: advisoryResult.nearest_kvk || undefined,
+        growth_stage: advisoryResult.growth_stage || undefined,
+        confidence: advisoryResult.confidence || undefined,
+        price_trend: advisoryResult.price_trend || undefined,
+        satellite_extras: advisoryResult.satellite_extras || undefined,
+        cross_validation: advisoryResult.cross_validation || undefined,
       });
     } else {
       advisoryText = language === "en"
@@ -627,6 +640,56 @@ export default function TalkPage() {
               </a>
             )}
 
+            {/* Cross-Validation Warnings */}
+            {summary.cross_validation && (() => {
+              const allAlerts = [
+                ...(summary.cross_validation.warnings || []),
+                ...(summary.cross_validation.flags || []),
+              ];
+              if (allAlerts.length === 0) return null;
+              return (
+                <div className="space-y-2">
+                  {allAlerts.map((alert, i) => (
+                    <div key={i} className="flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
+                      <AlertTriangle size={16} className="shrink-0" />
+                      <span>{alert.replace(/_/g, " ")}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* Growth Stage */}
+            {summary.growth_stage && summary.growth_stage.stage_name && (
+              <div className="rounded-xl bg-lime-500/10 border border-lime-500/20 p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-lime-500/20">
+                    <Sprout size={20} className="text-lime-400" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-white/50">Crop Stage</p>
+                    <p className="text-lg font-bold text-lime-300">
+                      {summary.growth_stage.stage_name}
+                      {summary.growth_stage.day_number != null && (
+                        <span className="text-sm font-normal text-white/50 ml-1">(Day {summary.growth_stage.day_number})</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                {summary.growth_stage.day_number != null && summary.growth_stage.total_days != null && summary.growth_stage.total_days > 0 && (
+                  <div className="mt-3">
+                    <div className="w-full h-2 rounded-full bg-white/10">
+                      <div
+                        className="h-2 rounded-full bg-gradient-to-r from-lime-500 to-emerald-400"
+                        style={{ width: `${Math.min(100, (summary.growth_stage.day_number / summary.growth_stage.total_days) * 100)}%` }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-white/30 mt-1 text-right">Day {summary.growth_stage.day_number} / {summary.growth_stage.total_days}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Best mandi — BIG price visual */}
             {summary.bestMandi && (
               <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-5 text-center">
@@ -638,14 +701,29 @@ export default function TalkPage() {
                 <div className="text-sm text-emerald-400/70">{t(language, "bestMandi")}</div>
                 <div className="text-2xl font-bold mt-1">{summary.bestMandi}</div>
                 {summary.bestPrice && (
-                  <div className="text-4xl font-black text-emerald-400 mt-1">₹{summary.bestPrice.toLocaleString()}</div>
+                  <div className="text-4xl font-black text-emerald-400 mt-1">{"\u20B9"}{summary.bestPrice.toLocaleString()}</div>
                 )}
                 {summary.distanceKm && (
                   <div className="text-sm text-white/40 mt-1">{summary.distanceKm} km</div>
                 )}
+                {/* Price Trend */}
+                {summary.price_trend && (
+                  <div className={`inline-flex items-center gap-1 mt-2 rounded-full px-3 py-1 text-xs font-medium ${
+                    summary.price_trend.direction === "up" || summary.price_trend.direction === "rising"
+                      ? "bg-emerald-500/20 text-emerald-400"
+                      : summary.price_trend.direction === "down" || summary.price_trend.direction === "falling"
+                      ? "bg-red-500/20 text-red-400"
+                      : "bg-yellow-500/20 text-yellow-400"
+                  }`}>
+                    {summary.price_trend.direction === "up" || summary.price_trend.direction === "rising" ? "\u2191" : summary.price_trend.direction === "down" || summary.price_trend.direction === "falling" ? "\u2193" : "\u2194"}
+                    {" "}
+                    {summary.price_trend.percent_change != null && `${Math.abs(summary.price_trend.percent_change)}%`}
+                    {summary.price_trend.period_days != null && ` / ${summary.price_trend.period_days}d`}
+                  </div>
+                )}
                 {summary.localMandi && summary.localPrice && summary.bestPrice && summary.bestPrice > summary.localPrice && (
                   <div className="mt-3 pt-3 border-t border-emerald-500/20 text-lg font-bold text-emerald-400">
-                    +₹{(summary.bestPrice - summary.localPrice).toLocaleString()}
+                    +{"\u20B9"}{(summary.bestPrice - summary.localPrice).toLocaleString()}
                     <span className="text-sm font-normal text-white/40 ml-1">/ qtl</span>
                   </div>
                 )}
@@ -675,13 +753,26 @@ export default function TalkPage() {
             {/* Advisory key points — visual icons for illiterate farmers */}
             {summary.advisory && (
               <div className="rounded-xl bg-white/5 border border-white/10 p-4 space-y-3">
-                <div className="text-sm font-bold text-white/60 mb-2">
-                  {language === "en" ? "Key Advice" : language === "hi" ? "मुख्य सलाह" : t(language, "adviceReady")}
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm font-bold text-white/60">
+                    {language === "en" ? "Key Advice" : language === "hi" ? "मुख्य सलाह" : t(language, "adviceReady")}
+                  </div>
+                  {/* Confidence Badge */}
+                  {summary.confidence && (
+                    <div className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                      summary.confidence === "high" ? "bg-emerald-500/20 text-emerald-400"
+                        : summary.confidence === "medium" ? "bg-yellow-500/20 text-yellow-400"
+                        : "bg-red-500/20 text-red-400"
+                    }`}>
+                      <Shield size={10} />
+                      {summary.confidence} confidence
+                    </div>
+                  )}
                 </div>
                 {summary.advisory.split(/[।.!\n]+/).filter(s => s.trim().length > 15).slice(0, 5).map((point, i) => {
                   const lower = point.toLowerCase();
                   const isWarning = lower.includes("बारिश") || lower.includes("rain") || lower.includes("barish") || lower.includes("khatr");
-                  const isSell = lower.includes("मंडी") || lower.includes("mandi") || lower.includes("बेच") || lower.includes("sell") || lower.includes("₹");
+                  const isSell = lower.includes("मंडी") || lower.includes("mandi") || lower.includes("बेच") || lower.includes("sell") || lower.includes("\u20B9");
                   const isHealth = lower.includes("satellite") || lower.includes("सैटेलाइट") || lower.includes("fasal") || lower.includes("फसल") || lower.includes("sehat") || lower.includes("सेहत");
                   return (
                     <div key={i} className={`flex items-start gap-3 rounded-lg p-3 ${isWarning ? "bg-amber-500/10 border border-amber-500/20" : isSell ? "bg-emerald-500/10 border border-emerald-500/20" : isHealth ? "bg-sky/10 border border-sky/20" : "bg-white/5"}`}>
@@ -692,6 +783,61 @@ export default function TalkPage() {
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {/* Satellite Extras */}
+            {summary.satellite_extras && (summary.satellite_extras.sar_soil_moisture || summary.satellite_extras.lst_heat || summary.satellite_extras.summary) && (
+              <div className="rounded-xl bg-indigo-500/10 border border-indigo-500/20 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Satellite size={18} className="text-indigo-400" />
+                  <span className="text-sm font-bold text-indigo-300">Satellite Insights</span>
+                </div>
+                <div className="space-y-2 text-sm">
+                  {summary.satellite_extras.sar_soil_moisture && (
+                    <div className="flex items-center gap-2">
+                      <Droplets size={14} className="text-sky-400 shrink-0" />
+                      <span className="text-white/70">SAR Soil Moisture: <span className="text-white/90 font-medium">{summary.satellite_extras.sar_soil_moisture}</span></span>
+                    </div>
+                  )}
+                  {summary.satellite_extras.lst_heat && (
+                    <div className="flex items-center gap-2">
+                      <Thermometer size={14} className="text-orange-400 shrink-0" />
+                      <span className="text-white/70">LST Heat: <span className="text-white/90 font-medium">{summary.satellite_extras.lst_heat}</span></span>
+                    </div>
+                  )}
+                  {summary.satellite_extras.summary && (
+                    <p className="text-white/60 text-xs mt-1">{summary.satellite_extras.summary}</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Nearest KVK */}
+            {summary.nearest_kvk && summary.nearest_kvk.name && (
+              <div className="rounded-xl bg-sky-500/10 border border-sky-500/20 p-4">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-500/20">
+                    <MapPin size={20} className="text-sky-400" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-white/50">Nearest KVK</p>
+                    <p className="text-base font-bold text-white/90">{summary.nearest_kvk.name}</p>
+                  </div>
+                </div>
+                <div className="space-y-1 text-sm text-white/60">
+                  {summary.nearest_kvk.district && <p>District: {summary.nearest_kvk.district}</p>}
+                  {summary.nearest_kvk.distance_km != null && <p>{summary.nearest_kvk.distance_km} km away</p>}
+                </div>
+                {summary.nearest_kvk.phone && (
+                  <a
+                    href={`tel:${summary.nearest_kvk.phone}`}
+                    className="inline-flex items-center gap-2 mt-3 rounded-lg bg-sky-500/20 border border-sky-500/30 px-4 py-2.5 text-sm font-medium text-sky-400 hover:bg-sky-500/30 transition"
+                  >
+                    <Phone size={16} />
+                    Call KVK: {summary.nearest_kvk.phone}
+                  </a>
+                )}
               </div>
             )}
 
