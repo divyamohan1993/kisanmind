@@ -121,71 +121,50 @@ const SLIDES = [
     bg: "bg-gradient-to-br from-[#0f1f3d] to-[#1a365d]",
     content: (
       <div className="text-white max-w-3xl mx-auto">
-        <p className="text-sm uppercase tracking-[0.15em] text-green-400 font-bold mb-2">Impact · Back-of-Envelope Math</p>
-        <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight mb-6">
-          +30% income per farmer. Here's the math.
+        <p className="text-sm uppercase tracking-[0.15em] text-green-400 font-bold mb-1">Impact · Back-of-Envelope Math</p>
+        <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight mb-3">
+          +26% income per farmer. Here's the math.
         </h2>
 
-        <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-6 text-xs text-white/80 leading-relaxed">
-          <p className="font-bold text-green-400 uppercase tracking-wider text-[0.65rem] mb-2">Assumptions</p>
-          <p>Avg smallholder: 2 hectares · 30 quintals/season · 2 seasons/year · Grows tomato or wheat · Baseline income ₹1,10,000/year · Nearest mandi 15km, best mandi 60km · Transport ₹3.5/km/quintal · Commission 4% · Perishable spoilage 0.5%/hr</p>
-        </div>
+        <p className="text-white/70 text-xs mb-4 leading-relaxed">
+          <span className="text-green-400 font-bold">Assumptions:</span> 2ha farm · 30q/season · 2 seasons/yr · Tomato/wheat · Income ₹1.1L/yr · Local mandi 15km · Best mandi 60km · Transport ₹3.5/km/q · Commission 4%
+        </p>
 
-        <div className="space-y-3 mb-6">
+        <div className="grid grid-cols-2 gap-2 mb-4">
           {[
-            {
-              lever: "Revenue recovered",
-              label: "Mandi price arbitrage",
-              math: "Best mandi ₹2,400/q vs local ₹1,800/q. Net after transport (60km × ₹3.5 = ₹210) + commission (₹96) + spoilage (₹36) = ₹2,058 net vs ₹1,728 local. Δ₹330/q × 30q × 2 seasons",
-              value: "+₹19,800/yr",
-            },
-            {
-              lever: "Cost reduced",
-              label: "Spoilage prevention",
-              math: "Weather-timed harvest avoids 5% post-harvest loss. 30q × ₹1,800/q × 5% = ₹2,700/season × 2",
-              value: "+₹5,400/yr",
-            },
-            {
-              lever: "Cost reduced",
-              label: "Irrigation savings",
-              math: "SAR + SMAP prevents 2 unnecessary irrigations/season. Borwell: ₹800/irrigation × 2 × 2 seasons",
-              value: "+₹3,200/yr",
-            },
-            {
-              lever: "Time saved",
-              label: "One call vs 3 trips",
-              math: "Mandi visit (2hr) + KVK trip (1.5hr) + weather check (0.5hr) = 4hr. At ₹200/day farm labor, 4hr = ₹100. ~6 queries/year",
-              value: "+₹600/yr",
-            },
-          ].map(({lever, label, math, value}) => (
-            <div key={label} className="bg-white/5 rounded-lg p-3 border border-white/10">
-              <div className="flex justify-between items-start gap-4">
-                <div className="flex-1">
+            ["Revenue recovered", "Mandi arbitrage", "₹2,400/q best vs ₹1,800 local. Net Δ₹330/q × 30q × 2", "+₹19,800"],
+            ["Cost reduced", "Spoilage prevention", "Weather-timed harvest avoids 5% loss. 30q × ₹1,800 × 5% × 2", "+₹5,400"],
+            ["Cost reduced", "Irrigation savings", "SAR+SMAP prevents 2 unneeded irrigations. ₹800 × 2 × 2", "+₹3,200"],
+            ["Time saved", "One call vs 3 trips", "4hr saved/query × 6 queries × ₹100", "+₹600"],
+          ].map(([lever, label, math, value]) => (
+            <div key={label} className="bg-white/5 rounded-lg p-2.5 border border-white/10">
+              <div className="flex justify-between items-start">
+                <div className="flex-1 min-w-0">
                   <span className="text-[0.6rem] uppercase tracking-wider text-green-400 font-bold">{lever}</span>
-                  <p className="font-semibold text-white text-sm">{label}</p>
-                  <p className="text-white/70 text-xs mt-0.5 leading-relaxed">{math}</p>
+                  <p className="font-semibold text-white text-xs">{label}</p>
+                  <p className="text-white/70 text-[0.65rem] mt-0.5 leading-snug">{math}</p>
                 </div>
-                <span className="text-green-400 font-bold text-lg whitespace-nowrap">{value}</span>
+                <span className="text-green-400 font-bold text-sm whitespace-nowrap ml-2">{value}</span>
               </div>
             </div>
           ))}
         </div>
 
-        <div className="grid grid-cols-3 gap-3 text-center">
-          <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4">
-            <p className="text-green-400 text-xs font-semibold">Per Farmer</p>
-            <p className="text-2xl font-extrabold text-white">₹29,000</p>
-            <p className="text-white/60 text-xs">/year (+26%)</p>
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-3">
+            <p className="text-green-400 text-[0.65rem] font-semibold">Per Farmer</p>
+            <p className="text-xl font-extrabold text-white">₹29,000</p>
+            <p className="text-white/60 text-[0.65rem]">/year (+26%)</p>
           </div>
-          <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4">
-            <p className="text-green-400 text-xs font-semibold">Year 1 · 100K</p>
-            <p className="text-2xl font-extrabold text-white">₹2.9B</p>
-            <p className="text-white/60 text-xs">value created</p>
+          <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-3">
+            <p className="text-green-400 text-[0.65rem] font-semibold">Year 1 · 100K</p>
+            <p className="text-xl font-extrabold text-white">₹2.9B</p>
+            <p className="text-white/60 text-[0.65rem]">value created</p>
           </div>
-          <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4">
-            <p className="text-green-400 text-xs font-semibold">150M farmers</p>
-            <p className="text-2xl font-extrabold text-white">₹4.4T</p>
-            <p className="text-white/60 text-xs">TAM ceiling</p>
+          <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-3">
+            <p className="text-green-400 text-[0.65rem] font-semibold">150M farmers</p>
+            <p className="text-xl font-extrabold text-white">₹4.4T</p>
+            <p className="text-white/60 text-[0.65rem]">TAM ceiling</p>
           </div>
         </div>
       </div>
