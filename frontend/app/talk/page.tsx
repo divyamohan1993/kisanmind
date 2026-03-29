@@ -405,49 +405,54 @@ export default function TalkPage() {
   const currentLang = LANGUAGES.find((l) => l.code === language) || LANGUAGES[0];
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[#0a0f14] text-white">
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-3 bg-[#0d1117]/90 border-b border-white/5">
-        <Link href="/" className="flex items-center gap-2">
+    <div className="fixed inset-0 z-50 flex flex-col bg-white text-gray-900">
+      {/* GOI Tricolor bar */}
+      <div className="flex h-1.5">
+        <div className="flex-1 bg-[#FF9933]" />
+        <div className="flex-1 bg-white" />
+        <div className="flex-1 bg-[#138808]" />
+      </div>
+
+      {/* Header — GOI style */}
+      <div className="flex items-center justify-between px-4 py-3 bg-[#1a3a5c] text-white">
+        <div className="flex items-center gap-2">
           <span className="text-xl">🌾</span>
-          <span className="text-base font-bold gradient-text">KisanMind</span>
-        </Link>
+          <div>
+            <div className="text-sm font-bold leading-tight">KisanMind</div>
+            <div className="text-[10px] text-white/60">AI Krishi Salahkaar Seva</div>
+          </div>
+        </div>
 
         {!isInCall && (
           <button
             onClick={() => setShowLangPicker(!showLangPicker)}
-            className="flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/15"
+            className="flex items-center gap-1.5 rounded bg-white/10 px-3 py-1.5 text-xs font-medium hover:bg-white/20 border border-white/20"
           >
-            <Volume2 size={14} />
             {currentLang.label}
           </button>
         )}
 
         {isInCall && (
-          <div className="flex items-center gap-2 text-sm">
-            <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-white/60">{currentLang.label}</span>
-            {callState === "listening" && <Mic size={14} className="text-emerald-400 animate-pulse" />}
+          <div className="flex items-center gap-2 text-xs">
+            <span className="h-2 w-2 rounded-full bg-red-400 animate-pulse" />
+            <span>{currentLang.label}</span>
+            {callState === "listening" && <Mic size={12} className="text-green-300 animate-pulse" />}
           </div>
         )}
-
-        <Link href="/" className="rounded-lg bg-white/5 px-3 py-2 text-xs text-white/60 hover:bg-white/10">
-          Dashboard
-        </Link>
       </div>
 
       {/* Language picker */}
       {showLangPicker && !isInCall && (
-        <div className="absolute top-14 left-0 right-0 z-50 bg-[#0d1117] border-b border-white/10 px-4 py-4 shadow-2xl">
+        <div className="absolute top-16 left-0 right-0 z-50 bg-white border-b border-gray-200 px-4 py-4 shadow-lg">
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 max-w-2xl mx-auto">
             {LANGUAGES.map((lang) => (
               <button
                 key={lang.code}
                 onClick={() => { setLanguage(lang.code); setShowLangPicker(false); }}
-                className={`rounded-xl px-3 py-3 text-sm font-medium min-h-[52px] ${
+                className={`rounded px-3 py-2.5 text-sm font-medium border ${
                   language === lang.code
-                    ? "bg-healthy/20 text-healthy border-2 border-healthy/40"
-                    : "bg-white/5 text-white/70 border-2 border-transparent hover:bg-white/10"
+                    ? "bg-[#138808] text-white border-[#138808]"
+                    : "bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100"
                 }`}
               >
                 {lang.label}
@@ -458,31 +463,42 @@ export default function TalkPage() {
       )}
 
       {/* Chat area */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-gray-50">
+        {/* Pre-call: GOI style landing */}
         {callState === "pre-call" && (
-          <div className="flex flex-col items-center justify-center h-full text-center opacity-50">
-            <Leaf size={48} className="mb-4" />
-            <p className="text-lg">🌾 KisanMind</p>
-            <p className="text-sm mt-2 text-white/40">Tap the green button to start</p>
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <div className="text-5xl mb-4">🌾</div>
+            <h1 className="text-2xl font-bold text-[#1a3a5c]">KisanMind</h1>
+            <p className="text-sm text-gray-500 mt-1">AI Krishi Salahkaar Seva</p>
+            <p className="text-xs text-gray-400 mt-4 max-w-xs">Satellite + Mandi + Mausam data se aapki fasal ki salah</p>
+            <div className="mt-8">
+              <button
+                onClick={startCall}
+                className="flex items-center gap-3 px-8 py-4 rounded-lg bg-[#138808] text-white text-lg font-bold shadow-lg hover:bg-[#0f6d06] active:scale-95 transition-transform"
+              >
+                <Phone size={24} />
+                Call KisanMind
+              </button>
+            </div>
+            <p className="text-[10px] text-gray-400 mt-6">Aatmanirbhar Bharat | 22 Bhashayen | Satellite Data</p>
           </div>
         )}
 
         {/* Messages */}
         {messages.map((msg, i) => (
           <div key={i} className={`flex ${msg.type === "farmer" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[85%] rounded-2xl px-4 py-3 leading-relaxed ${
+            <div className={`max-w-[85%] rounded-lg px-4 py-3 leading-relaxed ${
               msg.type === "farmer"
-                ? "bg-blue-600/20 border border-blue-500/20 text-white/90 text-sm"
+                ? "bg-[#1a3a5c] text-white text-sm"
                 : msg.kind === "advisory"
-                ? "bg-emerald-600/15 border-l-4 border-emerald-400 text-white text-base font-medium"
+                ? "bg-white border-l-4 border-[#138808] text-gray-900 text-sm shadow-sm"
                 : msg.kind === "status"
-                ? "bg-white/5 border border-white/10 text-white/60 text-xs italic"
-                : "bg-emerald-600/10 border border-emerald-500/20 text-white/90 text-sm"
+                ? "bg-gray-100 text-gray-500 text-xs italic border border-gray-200"
+                : "bg-white text-gray-800 text-sm shadow-sm border border-gray-100"
             }`}>
-              <div className="text-[10px] text-white/30 mb-1">
+              <div className={`text-[10px] mb-1 ${msg.type === "farmer" ? "text-white/50" : "text-gray-400"}`}>
                 {msg.type === "farmer" ? "You" : "KisanMind"} · {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </div>
-              {msg.kind === "advisory" && <span>🌾 </span>}
               {msg.text}
             </div>
           </div>
@@ -491,11 +507,11 @@ export default function TalkPage() {
         {/* Processing indicator */}
         {(callState === "processing" || callState === "connecting") && (
           <div className="flex justify-start">
-            <div className="bg-emerald-600/10 border border-emerald-500/20 rounded-2xl px-4 py-3">
+            <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm">
               <div className="flex gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" />
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:150ms]" />
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:300ms]" />
+                <span className="h-2 w-2 rounded-full bg-[#138808] animate-bounce" />
+                <span className="h-2 w-2 rounded-full bg-[#FF9933] animate-bounce [animation-delay:150ms]" />
+                <span className="h-2 w-2 rounded-full bg-[#1a3a5c] animate-bounce [animation-delay:300ms]" />
               </div>
             </div>
           </div>
@@ -507,18 +523,22 @@ export default function TalkPage() {
           const farmerMsgs = messages.filter(m => m.type === "farmer");
           if (advisoryMsgs.length === 0) return null;
           return (
-            <div className="mx-auto max-w-md mt-4 rounded-xl bg-emerald-900/20 border border-emerald-500/30 p-4 space-y-3">
-              <h3 className="text-center text-sm font-bold text-emerald-400 uppercase tracking-wide">Call Summary</h3>
+            <div className="mx-auto max-w-md mt-4 rounded-lg bg-white border-2 border-[#138808] p-4 space-y-3 shadow-md">
+              <div className="flex items-center justify-center gap-2">
+                <div className="h-0.5 flex-1 bg-[#FF9933]" />
+                <h3 className="text-xs font-bold text-[#1a3a5c] uppercase tracking-wider px-2">Call Summary</h3>
+                <div className="h-0.5 flex-1 bg-[#138808]" />
+              </div>
               {farmerMsgs.length > 0 && (
-                <div className="text-xs text-white/50">
-                  <span className="font-medium text-white/70">You said: </span>
+                <div className="text-xs text-gray-500">
+                  <span className="font-medium text-gray-700">You said: </span>
                   {farmerMsgs.map(m => m.text).join(" | ")}
                 </div>
               )}
-              <div className="text-sm text-white/90 leading-relaxed">
+              <div className="text-sm text-gray-800 leading-relaxed">
                 {advisoryMsgs[advisoryMsgs.length - 1].text}
               </div>
-              <div className="text-[10px] text-white/30 text-center">
+              <div className="text-[10px] text-gray-400 text-center border-t border-gray-100 pt-2">
                 KisanMind · {new Date().toLocaleDateString()} · Helpline: 1800-180-1551
               </div>
             </div>
@@ -528,48 +548,47 @@ export default function TalkPage() {
         <div ref={chatEndRef} />
       </div>
 
-      {/* Call controls */}
-      <div className="flex flex-col items-center gap-4 px-4 py-6 bg-[#0d1117]/80 border-t border-white/5">
-        {callState === "pre-call" && (
-          <button
-            onClick={startCall}
-            className="flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-500/30 hover:scale-105 active:scale-95 transition-transform"
-          >
-            <Phone size={32} className="text-white" />
-          </button>
-        )}
+      {/* Call controls — bottom bar */}
+      {(isInCall || callState === "ended") && (
+        <div className="flex flex-col items-center gap-2 px-4 py-4 bg-white border-t border-gray-200">
+          {isInCall && (
+            <>
+              <button
+                onClick={endCall}
+                className="flex items-center gap-2 px-6 py-3 rounded-lg bg-red-600 text-white font-medium hover:bg-red-700 active:scale-95 transition-transform"
+              >
+                <PhoneOff size={18} />
+                End Call
+              </button>
+              {callState === "listening" && (
+                <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                  <Mic size={12} className="text-[#138808] animate-pulse" /> Listening...
+                </div>
+              )}
+              {callState === "speaking" && (
+                <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                  <Volume2 size={12} className="text-[#FF9933] animate-pulse" /> Speaking...
+                </div>
+              )}
+            </>
+          )}
+          {callState === "ended" && (
+            <button
+              onClick={() => { setCallState("pre-call"); setMessages([]); }}
+              className="flex items-center gap-2 px-6 py-3 rounded-lg bg-[#138808] text-white font-medium hover:bg-[#0f6d06] active:scale-95 transition-transform"
+            >
+              <Phone size={18} />
+              New Call
+            </button>
+          )}
+        </div>
+      )}
 
-        {isInCall && (
-          <button
-            onClick={endCall}
-            className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-red-700 shadow-lg shadow-red-500/30 hover:scale-105 active:scale-95 transition-transform"
-          >
-            <PhoneOff size={28} className="text-white" />
-          </button>
-        )}
-
-        {callState === "ended" && (
-          <button
-            onClick={() => { setCallState("pre-call"); setMessages([]); }}
-            className="flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-500/30 hover:scale-105 active:scale-95 transition-transform"
-          >
-            <Phone size={32} className="text-white" />
-          </button>
-        )}
-
-        {callState === "listening" && (
-          <div className="flex items-center gap-2">
-            <Mic size={16} className="text-emerald-400 animate-pulse" />
-            <span className="text-xs text-white/40">Listening...</span>
-          </div>
-        )}
-
-        {callState === "speaking" && (
-          <div className="flex items-center gap-2">
-            <Volume2 size={16} className="text-emerald-400 animate-pulse" />
-            <span className="text-xs text-white/40">Speaking...</span>
-          </div>
-        )}
+      {/* Footer — GOI style */}
+      <div className="flex h-1.5">
+        <div className="flex-1 bg-[#FF9933]" />
+        <div className="flex-1 bg-white" />
+        <div className="flex-1 bg-[#138808]" />
       </div>
     </div>
   );
