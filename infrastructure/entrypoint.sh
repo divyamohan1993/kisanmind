@@ -1,9 +1,14 @@
 #!/bin/bash
-# KisanMind — Entrypoint script
-# Next.js on port 8080 (Cloud Run exposes this)
+# KisanMind — Entrypoint script (VM deployment)
+# Next.js on port 8080 (public)
 # Python backend on port 8081 (internal, proxied via Next.js rewrites)
 
 echo "=== KisanMind Starting ==="
+
+# Load .env if present
+if [ -f /app/.env ]; then
+    set -a; source /app/.env; set +a
+fi
 
 # Start the Python backend API on port 8081 (internal)
 cd /app
@@ -20,13 +25,13 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-# Start the Next.js frontend on port 8080 (Cloud Run's exposed port)
+# Start the Next.js frontend on port 8080
 cd /app/frontend
 PORT=8080 node server.js &
 FRONTEND_PID=$!
 
-echo "Frontend running on :8080 (PID: $FRONTEND_PID) — Cloud Run exposed"
-echo "Backend running on :8081 (PID: $BACKEND_PID) — internal, proxied via /api/*"
+echo "Frontend running on :8080 (PID: $FRONTEND_PID)"
+echo "Backend running on :8081 (PID: $BACKEND_PID)"
 
 # Wait for either process to exit
 wait -n $FRONTEND_PID $BACKEND_PID

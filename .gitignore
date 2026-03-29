@@ -11,3 +11,4 @@ build/
 *.log
 .playwright-mcp/
 *.png
+data/satellite_cache/*.json

@@ -14,6 +14,7 @@ import json
 import math
 import os
 import logging
+from datetime import datetime as _dt
 from pathlib import Path
 from typing import Optional
 
@@ -34,6 +35,7 @@ class SatelliteCache:
         self.grid_step: float = 0.1
         self.computed_at: str = ""
         self.sources: dict = {}
+        self.district_index: dict[str, dict] = {}
         self._loaded = False
         self._load()
 
@@ -119,9 +121,8 @@ class SatelliteCache:
         if not self.computed_at:
             return 999
         try:
-            from datetime import datetime
-            computed = datetime.fromisoformat(self.computed_at.replace("Z", "+00:00"))
-            now = datetime.now(computed.tzinfo)
+            computed = _dt.fromisoformat(self.computed_at.replace("Z", "+00:00"))
+            now = _dt.now(computed.tzinfo)
             return (now - computed).total_seconds() / 3600
         except Exception:
             return 999
@@ -149,7 +150,7 @@ class SatelliteCache:
         # Search multiple grid step sizes to handle mixed-resolution cache
         best = None
         best_dist = max_distance_km + 1
-        search_steps = {self.grid_step, 0.05, 0.1, 0.5}  # all possible grid steps
+        search_steps = {0.05, 0.1, 0.5} if self.grid_step in (0.05, 0.1, 0.5) else {self.grid_step, 0.05, 0.1, 0.5}
         for step in search_steps:
             for dlat_mult in range(-2, 3):
                 for dlon_mult in range(-2, 3):
@@ -298,5 +299,5 @@ class SatelliteCache:
             "cache_age_hours": round(self.cache_age_hours, 1),
             "sources": self.sources,
             "index_size": len(self.grid_index),
-            "district_count": len(self.district_index) if hasattr(self, "district_index") else 0,
+            "district_count": len(self.district_index),
         }

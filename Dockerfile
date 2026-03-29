@@ -1,4 +1,4 @@
-# KisanMind — Multi-stage Docker build
+# KisanMind — Multi-stage Docker build (VM deployment)
 # Stage 1: Build the Next.js frontend
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app/frontend
@@ -24,8 +24,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code
 COPY backend/ ./backend/
-COPY agents/ ./agents/
-COPY cloud_functions/ ./cloud_functions/
 COPY data/ ./data/
 COPY scripts/ ./scripts/
 
@@ -37,9 +35,6 @@ COPY --from=frontend-builder /app/frontend/public ./frontend/public
 # Copy entrypoint
 COPY infrastructure/entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
-
-# Copy .env if it exists (for local Docker builds)
-COPY .env* ./
 
 # Environment
 ENV PORT=8080

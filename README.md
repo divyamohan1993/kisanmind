@@ -97,55 +97,6 @@ graph TB
     style I fill:#FF9933,color:#fff
 ```
 
-## Multi-Agent Architecture (Google ADK)
-
-```mermaid
-graph LR
-    subgraph "Input"
-        V[Farmer Voice/Text]
-    end
-
-    subgraph "VaaniSetu — Voice Bridge"
-        VS[STT → Intent Extraction<br/>Language Detection<br/>Agent Routing]
-    end
-
-    subgraph "Specialist Agents"
-        SD[SatDrishti<br/>Crop Health<br/>NDVI/EVI/NDWI]
-        MM[MandiMitra<br/>Market Prices<br/>Profit Ranking]
-        MG[MausamGuru<br/>Weather Advisory<br/>Crop-Specific Actions]
-    end
-
-    subgraph "Brain — Orchestrator"
-        BR[Route Intents<br/>Merge Agent Outputs<br/>Enforce Guardrails<br/>Synthesize Advisory]
-    end
-
-    V --> VS
-    VS --> BR
-    BR --> SD
-    BR --> MM
-    BR --> MG
-    SD --> BR
-    MM --> BR
-    MG --> BR
-    BR -->|Final Advisory| V
-
-    style VS fill:#6366f1,color:#fff
-    style SD fill:#22c55e,color:#fff
-    style MM fill:#FF9933,color:#fff
-    style MG fill:#38bdf8,color:#fff
-    style BR fill:#1a365d,color:#fff
-```
-
-| Agent | Role | Model | Key Capability |
-|-------|------|-------|----------------|
-| **VaaniSetu** | Voice I/O & routing | Gemini 2.5 Flash | STT → intent extraction → language detection → specialist routing → TTS |
-| **SatDrishti** | Crop health from space | Gemini 2.0 Flash | Sentinel-2 NDVI/EVI/NDWI analysis, health classification, trend detection |
-| **MandiMitra** | Market intelligence | Gemini 2.0 Flash | AgMarkNet prices, net profit ranking (price - transport - commission - spoilage) |
-| **MausamGuru** | Weather-to-action | Gemini 2.5 Flash | 5-day forecast → crop + growth-stage specific DO/DON'T/WARNING advisories |
-| **Brain** | Orchestrator | Gemini 2.5 Pro | Intent routing, agent coordination, guardrail enforcement, advisory synthesis |
-
----
-
 ## Voice Call Flow
 
 ```mermaid
@@ -241,7 +192,6 @@ Every response includes `data_age_minutes` and `freshness_note`.
 | Layer | Technology |
 |-------|-----------|
 | **LLM** | Gemini 3.1 Pro (advisory) + Gemini 3.1 Flash Lite (intent + fact-check) + Gemini Live (voice streaming) |
-| **Agents** | Google ADK (Agent Development Kit) — 5 specialist agents |
 | **Satellite** | Google Earth Engine — Sentinel-2, Sentinel-1 SAR, MODIS, NASA SMAP |
 | **Voice** | Cloud Speech-to-Text V2 + Cloud TTS Wavenet/Neural2 |
 | **Translation** | Cloud Translation API v3 (22 Indian languages) |
@@ -252,9 +202,9 @@ Every response includes `data_age_minutes` and `freshness_note`.
 | **Weather** | Open-Meteo API (5-day forecast + 120-day historical) |
 | **Maps** | Google Maps Geocoding, Distance Matrix, Places APIs |
 | **Cache** | In-memory L1 + Google Cloud Storage L2 |
-| **Deployment** | Cloud Run (asia-south1) + GCE VM (kisanmind.dmj.one) |
+| **Deployment** | Docker on VM (kisanmind.dmj.one) |
 
-**Google Cloud Services**: Earth Engine, Cloud Run, Compute Engine, Cloud STT V2, Cloud TTS, Cloud Translation, Cloud Storage, Cloud Build, Artifact Registry
+**Google Cloud Services**: Earth Engine, Cloud STT V2, Cloud TTS, Cloud Translation, Cloud Storage
 
 ---
 
@@ -334,60 +284,30 @@ Languages without native TTS are auto-translated to Hindi for speech synthesis.
 ```
 kisanmind/
 ├── backend/
-│   ├── main.py                 # FastAPI — 3400+ lines, all endpoints + real APIs
-│   ├── gemini_live.py          # Gemini Live WebSocket sessions
-│   ├── satellite_cache.py      # Pre-computed NDVI cache manager
-│   ├── requirements.txt
-│   └── Dockerfile
+│   ├── main.py                 # FastAPI backend — all endpoints + real APIs
+│   ├── gemini_live.py          # Gemini Live WebSocket session manager
+│   ├── satellite_cache.py      # Pre-computed satellite data cache (O(1) lookup)
+│   └── __init__.py
 ├── frontend/
 │   ├── app/
-│   │   ├── page.tsx            # Voice-first interface (main page)
+│   │   ├── page.tsx            # Voice-first conversation interface
 │   │   ├── layout.tsx          # App layout
-│   │   ├── api/advisory/       # API proxy route
-│   │   ├── components/         # SatelliteMap, NDVIChart, MandiComparison,
-│   │   │                       # WeatherTimeline, ConversationBubble, VoiceInput
-│   │   └── hooks/              # useGeolocation
-│   ├── package.json
-│   └── Dockerfile
-├── agents/                     # Google ADK agent definitions
-│   ├── brain/                  # Orchestrator — routing + synthesis + guardrails
-│   │   ├── orchestrator.py
-│   │   └── config.yaml         # Agent routing rules + guardrail config
-│   ├── sat_drishti/            # Crop health agent (Earth Engine)
-│   │   ├── agent.py
-│   │   ├── earth_engine.py
-│   │   └── ndvi_interpreter.py
-│   ├── mandi_mitra/            # Market price agent (AgMarkNet)
-│   │   ├── agent.py
-│   │   ├── agmarknet_client.py
-│   │   └── profit_optimizer.py
-│   ├── mausam_guru/            # Weather advisory agent (Open-Meteo)
-│   │   ├── agent.py
-│   │   ├── crop_weather_rules.py
-│   │   └── openweather_client.py
-│   └── vaani_setu/             # Voice bridge agent (STT/TTS)
-│       ├── agent.py
-│       ├── stt_handler.py
-│       ├── tts_handler.py
-│       └── intent_extractor.py
-├── cloud_functions/            # Serverless function implementations
-│   ├── compute_ndvi/           # Earth Engine NDVI computation
-│   ├── fetch_mandi_prices/     # AgMarkNet API wrapper
-│   ├── fetch_weather/          # Open-Meteo wrapper
-│   └── geocode/                # Google Maps reverse geocoding
+│   │   ├── globals.css         # Tailwind CSS theme
+│   │   └── hooks/
+│   │       └── useGeolocation.ts
+│   ├── next.config.ts
+│   └── package.json
 ├── data/
-│   ├── knowledge_base/
-│   │   ├── crop_guides/        # Tomato, Wheat — varieties, NDVI benchmarks
-│   │   ├── government_schemes/ # PM-Kisan scheme info
-│   │   └── pest_disease/       # Common pests reference
-│   ├── bigquery/               # crop_calendar.csv, mandi_master.csv, ndvi_benchmarks.csv
-│   └── satellite_cache/        # Pre-computed NDVI per district/location
+│   └── satellite_cache/
+│       └── latest.json         # Pre-computed satellite grid (NDVI/SAR/LST/SMAP)
+├── scripts/
+│   ├── precompute_satellite.py # Batch satellite data pre-computation
+│   └── refresh_mandi_cache.py  # Mandi price cache refresh
 ├── infrastructure/
-│   ├── setup.sh                # One-command project setup
-│   ├── deploy.sh               # Cloud Run deployment
+│   ├── deploy.sh               # VM Docker deployment
 │   └── entrypoint.sh           # Docker entrypoint (frontend + backend)
-├── architecture/               # System diagrams (PNG, SVG)
-├── Dockerfile                  # Multi-stage build (frontend + backend)
+├── Dockerfile                  # Multi-stage build (Node.js + Python)
+├── requirements.txt            # Python dependencies
 ├── .env.example                # Environment variable template
 └── README.md
 ```
@@ -398,7 +318,7 @@ kisanmind/
 
 ### Prerequisites
 
-- Python 3.12+ | Node.js 22+ | Google Cloud SDK
+- Python 3.11+ | Node.js 20+ | Docker (for deployment)
 
 ### 1. Clone & Configure
 
@@ -406,48 +326,26 @@ kisanmind/
 git clone https://github.com/divyamohan1993/kisanmind.git
 cd kisanmind
 cp .env.example .env
+# Fill in API keys (see .env.example for details)
 ```
 
-Fill in `.env`:
-```env
-GOOGLE_MAPS_API_KEY=       # Maps Geocoding + Distance Matrix
-GEMINI_API_KEY=            # Gemini 3.1 Pro + Flash
-AGMARKNET_API_KEY=         # data.gov.in commodity prices
-TWILIO_ACCOUNT_SID=        # (Optional) Twilio voice calls
-TWILIO_AUTH_TOKEN=         # (Optional)
-TWILIO_PHONE_NUMBER=       # (Optional)
-```
-
-### 2. Run Backend
+### 2. Run Locally
 
 ```bash
-cd backend
+# Backend (terminal 1)
 pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8081
-```
+PYTHONPATH=. uvicorn backend.main:app --host 0.0.0.0 --port 8081
 
-### 3. Run Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
+# Frontend (terminal 2)
+cd frontend && npm install && npm run dev
 # Open http://localhost:3000
 ```
 
-### 4. Deploy to Cloud Run
+### 3. Deploy with Docker
 
 ```bash
 ./infrastructure/deploy.sh
-```
-
-Or manually:
-```bash
-# Backend
-cd backend && gcloud run deploy kisanmind-api --source . --region asia-south1
-
-# Frontend
-cd frontend && gcloud run deploy kisanmind --source . --region asia-south1
+# App runs at http://localhost:8080
 ```
 
 ---

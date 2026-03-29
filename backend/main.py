@@ -4,14 +4,17 @@ NO fake data. Every data point comes from a real API call.
 """
 
 import os
-import sys
 import json
 import struct
 import math
 import io
 import base64
 import asyncio
+import html
 import logging
+import re
+import time as _time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -57,12 +60,11 @@ log = logging.getLogger("kisanmind")
 # ---------------------------------------------------------------------------
 # In-memory response caches (dict with timestamps, no external deps)
 # ---------------------------------------------------------------------------
-import time as _time
 
 # ---------------------------------------------------------------------------
 # Persistent cache via GCS (survives deploys) + in-memory L1 cache (fast)
 # ---------------------------------------------------------------------------
-GCS_CACHE_BUCKET = "kisanmind-cache"
+GCS_CACHE_BUCKET = os.getenv("GCS_CACHE_BUCKET", "kisanmind-cache")
 _ADVISORY_TTL = 15 * 60      # 15 min — mandi prices can shift intraday
 _NDVI_TTL = 6 * 60 * 60      # 6 hours — satellite data updates weekly
 _MANDI_RAW_TTL = 60 * 60     # 1 hour — raw mandi data from AgMarkNet
@@ -108,15 +110,18 @@ async def _gcs_set(key: str, value: dict):
     """Write cached JSON to GCS (fire-and-forget, don't block the response)."""
     safe_key = key.replace(":", "_").replace("/", "_")
     try:
-        from google.cloud import storage as gcs_storage
-        gcs_client = gcs_storage.Client()
-        bucket = gcs_client.bucket(GCS_CACHE_BUCKET)
-        blob = bucket.blob(f"advisory-cache/{safe_key}.json")
-        value_with_ts = {**value, "_cached_at": _time.time()}
-        blob.upload_from_string(
-            json.dumps(value_with_ts, ensure_ascii=False, default=str),
-            content_type="application/json",
-        )
+        def _upload():
+            from google.cloud import storage as gcs_storage
+            gcs_client = gcs_storage.Client()
+            bucket = gcs_client.bucket(GCS_CACHE_BUCKET)
+            blob = bucket.blob(f"advisory-cache/{safe_key}.json")
+            value_with_ts = {**value, "_cached_at": _time.time()}
+            blob.upload_from_string(
+                json.dumps(value_with_ts, ensure_ascii=False, default=str),
+                content_type="application/json",
+            )
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _upload)
     except Exception as e:
         log.warning(f"GCS cache write failed for {key}: {e}")
 
@@ -149,7 +154,7 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 # Gemini model with fallback — primary model may be overloaded
 GEMINI_MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash"]
 
-def _gemini_generate(contents, config=None, use_pro=False):
+def _gemini_generate(contents, config=None):
     """Call Gemini with model fallback."""
     last_err = None
     models = GEMINI_MODELS
@@ -166,7 +171,7 @@ def _gemini_generate(contents, config=None, use_pro=False):
 
 
 # Earth Engine initialization (once at startup)
-EE_PROJECT = "dmjone"
+EE_PROJECT = os.getenv("EE_PROJECT", "dmjone")
 EE_INITIALIZED = False
 
 def _init_earth_engine():
@@ -392,11 +397,11 @@ def _fetch_agmarknet_commodities():
     """Fetch all unique commodity names from AgMarkNet at startup."""
     global _agmarknet_commodities
     try:
-        import requests
         url = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
         params = {"api-key": AGMARKNET_API_KEY, "format": "json", "limit": 1000, "offset": 0}
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
+        with httpx.Client(timeout=15) as client:
+            resp = client.get(url, params=params)
+            resp.raise_for_status()
         data = resp.json()
         commodities = set()
         for r in data.get("records", []):
@@ -461,7 +466,6 @@ async def fetch_mandi_prices(crop: str, state: str) -> list[dict]:
     source = "unknown"
 
     # Build list of crop names to try (dynamically matched from AgMarkNet's commodity list)
-    crop_lower = crop.lower().replace(" ", "_")
     crop_variants = _match_agmarknet_commodity(crop)
     for variant in crop_variants:
         variant_key = variant.lower().replace(" ", "_").replace("(", "").replace(")", "")
@@ -555,7 +559,6 @@ def analyze_price_trend(mandis: list[dict]) -> dict:
         return {"trend": "unknown", "trend_percent": 0, "confidence": "LOW", "detail": "No price data available."}
 
     # Group prices by date to detect trends
-    from collections import defaultdict
     prices_by_date: dict[str, list[float]] = defaultdict(list)
     for m in mandis:
         date_str = m.get("arrival_date", "")
@@ -1363,13 +1366,12 @@ End with: "Yeh aaj ki data ke hisaab se hai. Final faisla aapka hai."
 """
 
     # Run Gemini in thread pool to avoid blocking the asyncio event loop
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     response = await loop.run_in_executor(
         None,
         lambda: _gemini_generate(prompt),
     )
 
-    import re
     text = response.text
     # Strip ALL markdown formatting
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
@@ -1386,7 +1388,6 @@ End with: "Yeh aaj ki data ke hisaab se hai. Final faisla aapka hai."
         try:
             translate_client = translate.Client()
             result = translate_client.translate(text, target_language=language, source_language="en")
-            import html
             text = html.unescape(result["translatedText"])
             log.info(f"Translated advisory from English to {language}")
         except Exception as e:
@@ -1758,7 +1759,7 @@ async def fetch_ndvi(lat: float, lon: float) -> Optional[dict]:
         log.warning("Earth Engine not initialized — skipping NDVI")
         return None
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(_ee_executor, _compute_ndvi_sync, lat, lon)
         if "error" in result:
             log.warning(f"NDVI computation returned error: {result['error']}")
@@ -1774,7 +1775,7 @@ async def fetch_ndvi_trajectory(lat: float, lon: float) -> dict:
     if not EE_INITIALIZED:
         return {}
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(_ee_executor, _compute_ndvi_trajectory, lat, lon)
         return result
     except Exception as e:
@@ -2072,7 +2073,7 @@ async def fetch_satellite_extras(lat: float, lon: float) -> dict:
     if not EE_INITIALIZED:
         return {}
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     results = {}
 
     # Run all three in parallel via thread pool
@@ -2642,10 +2643,13 @@ async def text_to_speech(req: TTSRequest):
             audio_encoding=tts.AudioEncoding.MP3,
             speaking_rate=1.15,
         )
-        response = tts_client.synthesize_speech(
-            input=synthesis_input,
-            voice=voice,
-            audio_config=audio_config,
+        response = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: tts_client.synthesize_speech(
+                input=synthesis_input,
+                voice=voice,
+                audio_config=audio_config,
+            ),
         )
     except Exception as e:
         raise HTTPException(502, f"Google Cloud TTS failed: {e}")
@@ -2685,7 +2689,7 @@ Make them useful and interesting for an Indian farmer. Examples:
 Return ONLY 3 facts, one per line. No numbering, no bullets. Keep each under 20 words."""
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         resp = await loop.run_in_executor(None, lambda: _gemini_generate(prompt))
         raw = (resp.text or "").strip()
         facts = [line.strip() for line in raw.split("\n") if line.strip()][:3] if raw else []
@@ -2694,8 +2698,7 @@ Return ONLY 3 facts, one per line. No numbering, no bullets. Keep each under 20 
         if req.language != "en":
             try:
                 tc = translate.Client()
-                import html as _html
-                facts = [_html.unescape(tc.translate(f, target_language=req.language, source_language="en")["translatedText"]) for f in facts]
+                facts = [html.unescape(tc.translate(f, target_language=req.language, source_language="en")["translatedText"]) for f in facts]
             except Exception:
                 pass
 
@@ -2724,7 +2727,6 @@ async def batch_translate(req: TranslateRequest):
             result = translate_client.translate(
                 text, target_language=req.target_language, source_language="en"
             )
-            import html
             translated.append(html.unescape(result["translatedText"]))
         return {"translated": translated}
     except Exception as e:
@@ -2759,19 +2761,13 @@ async def websocket_chat(ws: WebSocket):
                 longitude = msg.get("longitude", 0)
                 has_gps = latitude != 0 and longitude != 0
 
-                locale_map = {
-                    "hi": "hi-IN", "ta": "ta-IN", "te": "te-IN", "bn": "bn-IN",
-                    "mr": "mr-IN", "gu": "gu-IN", "kn": "kn-IN", "ml": "ml-IN",
-                    "pa": "pa-IN", "en": "en-IN",
-                }
-                locale = locale_map.get(language, "hi-IN")
+                locale = LANGUAGE_TO_LOCALE.get(language, "hi-IN")
 
                 async def _on_audio(pcm_data: bytes):
                     if ws.client_state == WebSocketState.CONNECTED:
-                        import base64 as b64
                         await ws.send_json({
                             "type": "audio",
-                            "data": b64.b64encode(pcm_data).decode(),
+                            "data": base64.b64encode(pcm_data).decode(),
                         })
 
                 async def _on_transcript(speaker: str, text: str):
@@ -2783,8 +2779,7 @@ async def websocket_chat(ws: WebSocket):
                                 result = translate_client.translate(
                                     text, target_language=language, source_language="en"
                                 )
-                                import html as html_mod
-                                display_text = html_mod.unescape(result["translatedText"])
+                                display_text = html.unescape(result["translatedText"])
                             except Exception:
                                 display_text = text
                         await ws.send_json({
@@ -2822,8 +2817,7 @@ async def websocket_chat(ws: WebSocket):
                 await ws.send_json({"type": "session_started", "session_id": session_id})
 
             elif msg_type == "audio" and session:
-                import base64 as b64
-                pcm_data = b64.b64decode(msg["data"])
+                pcm_data = base64.b64decode(msg["data"])
                 await session.send_audio(pcm_data)
 
             elif msg_type == "text" and session:
@@ -2888,7 +2882,9 @@ async def speech_to_text(request: Request):
             content=audio_bytes,
         )
 
-        response = stt_client.recognize(request=stt_request)
+        response = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: stt_client.recognize(request=stt_request)
+        )
 
     except Exception as e:
         log.exception(f"STT failed: {e}")
@@ -2921,7 +2917,7 @@ Return ONLY valid JSON (no markdown, no explanation):
 }}"""
 
     try:
-        _loop = asyncio.get_event_loop()
+        _loop = asyncio.get_running_loop()
         response = await _loop.run_in_executor(
             None, lambda: _gemini_generate(prompt)
         )
@@ -2947,6 +2943,19 @@ Return ONLY valid JSON (no markdown, no explanation):
 # Text chat (for Twilio and fallback)
 # ---------------------------------------------------------------------------
 _text_sessions: dict[str, dict] = {}
+_MAX_SESSIONS = 1000
+
+
+def _cleanup_sessions():
+    """Evict stale sessions to prevent unbounded memory growth. O(n) but called rarely."""
+    now = _time.time()
+    stale = [k for k, v in _text_sessions.items() if now - v.get("created_at", 0) > 3600]
+    for k in stale:
+        del _text_sessions[k]
+    stale_calls = [k for k, v in _call_sessions.items() if now - v.get("timestamp", 0) > _CALL_SESSION_TTL]
+    for k in stale_calls:
+        del _call_sessions[k]
+
 
 CHAT_SYSTEM_PROMPT = """You are KisanMind — a wise farming neighbor who helps Indian farmers.
 
@@ -2997,9 +3006,32 @@ SAFETY: Never recommend pesticide brands → refer to KVK 1800-180-1551.
 """
 
 
+def _build_chat_contents(history: list[dict]) -> list:
+    """Convert session history to Gemini Content objects. O(n) in history length."""
+    contents = []
+    for turn in history:
+        parts = []
+        for p in turn["parts"]:
+            if "text" in p:
+                parts.append(types.Part(text=p["text"]))
+            elif "function_call" in p:
+                parts.append(types.Part(function_call=types.FunctionCall(
+                    name=p["function_call"]["name"], args=p["function_call"]["args"],
+                )))
+            elif "function_response" in p:
+                parts.append(types.Part(function_response=types.FunctionResponse(
+                    name=p["function_response"]["name"], response=p["function_response"]["response"],
+                )))
+        contents.append(types.Content(role=turn["role"], parts=parts))
+    return contents
+
+
 @app.post("/api/chat")
 async def text_chat(req: ChatRequest):
     """Text-based chat endpoint — used by Twilio and as fallback."""
+    if len(_text_sessions) > _MAX_SESSIONS:
+        _cleanup_sessions()
+
     session_id = req.session_id or str(uuid.uuid4())
 
     if session_id not in _text_sessions:
@@ -3018,16 +3050,7 @@ async def text_chat(req: ChatRequest):
     location_note = f"Farmer's GPS: ({req.latitude}, {req.longitude})" if has_gps else "No GPS available."
     lang_note = f"Farmer's language: {req.language}. Respond accordingly (see LANGUAGE RULE)."
 
-    contents = []
-    for turn in session["history"]:
-        contents.append(types.Content(
-            role=turn["role"],
-            parts=[types.Part(text=p["text"]) if "text" in p else
-                   types.Part(function_call=types.FunctionCall(name=p["function_call"]["name"], args=p["function_call"]["args"])) if "function_call" in p else
-                   types.Part(function_response=types.FunctionResponse(name=p["function_response"]["name"], response=p["function_response"]["response"])) if "function_response" in p else
-                   types.Part(text="")
-                   for p in turn["parts"]],
-        ))
+    contents = _build_chat_contents(session["history"])
 
     tool_decls = [
         {
@@ -3053,7 +3076,7 @@ async def text_chat(req: ChatRequest):
     ]
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
             None,
             lambda: _gemini_generate(
@@ -3084,21 +3107,7 @@ async def text_chat(req: ChatRequest):
                         "parts": [{"function_response": {"name": fc.name, "response": tool_result}}]
                     })
 
-                    contents2 = []
-                    for turn in session["history"]:
-                        parts = []
-                        for p in turn["parts"]:
-                            if "text" in p:
-                                parts.append(types.Part(text=p["text"]))
-                            elif "function_call" in p:
-                                parts.append(types.Part(function_call=types.FunctionCall(
-                                    name=p["function_call"]["name"], args=p["function_call"]["args"],
-                                )))
-                            elif "function_response" in p:
-                                parts.append(types.Part(function_response=types.FunctionResponse(
-                                    name=p["function_response"]["name"], response=p["function_response"]["response"],
-                                )))
-                        contents2.append(types.Content(role=turn["role"], parts=parts))
+                    contents2 = _build_chat_contents(session["history"])
 
                     response2 = await loop.run_in_executor(
                         None,
@@ -3107,7 +3116,6 @@ async def text_chat(req: ChatRequest):
                             config=types.GenerateContentConfig(
                                 system_instruction=CHAT_SYSTEM_PROMPT + f"\n\n{location_note}\n{lang_note}",
                             ),
-                            use_pro=False,
                         ),
                     )
                     response_text = (response2.text or "").strip() or "I could not generate a response. Please try again."
@@ -3174,9 +3182,8 @@ async def summarize_advisory(req: SummarizeRequest):
             f"Respond in the same language as the input.\n\n"
             f"Advisory:\n{req.text}"
         )
-        response = gemini_client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=prompt,
+        response = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: _gemini_generate(prompt)
         )
         summary = response.text.strip() if response.text else req.text[:200]
         return {"summary": summary}
@@ -3238,7 +3245,6 @@ async def _send_sms_summary(to_number: str, advisory_data: dict, language: str =
             try:
                 translate_client = translate.Client()
                 result = translate_client.translate(sms_body, target_language=language, source_language="en")
-                import html
                 sms_body = html.unescape(result["translatedText"])
             except Exception:
                 pass  # Keep English if translation fails
