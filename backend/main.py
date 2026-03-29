@@ -267,12 +267,6 @@ class TTSRequest(BaseModel):
     language: str = "hi"
 
 
-class STTRequest(BaseModel):
-    audio_base64: str
-    language: str = "hi-IN"
-    encoding: str = "WEBM_OPUS"
-
-
 class NDVIRequest(BaseModel):
     latitude: float
     longitude: float
@@ -1078,6 +1072,19 @@ SPOILAGE WARNING: {crop} is perishable. Transit to {best_mandi['market']} takes 
   Estimated spoilage loss: Rs {best_mandi['spoilage_loss_per_quintal']}/quintal in transit.
   TIP: Leave early morning (before 5 AM) to reduce heat damage."""
 
+    # Top mandis summary (so Gemini can mention alternatives if farmer asks)
+    top_mandis_section = ""
+    if mandis:
+        sorted_mandis = sorted(
+            [m for m in mandis if m.get("net_profit_per_quintal") is not None],
+            key=lambda m: m["net_profit_per_quintal"], reverse=True
+        )[:5]
+        if sorted_mandis:
+            lines = ["OTHER MANDIS (top 5 by net profit, for follow-up questions):"]
+            for m in sorted_mandis:
+                lines.append(f"  {m['market']} ({m.get('district', '')}): Rs {m['modal_price']}/q, {m.get('distance_km', '?')}km, net Rs {m['net_profit_per_quintal']}/q")
+            top_mandis_section = "\n".join(lines)
+
     # Quantity calculation
     quantity_section = ""
     if quantity_quintals > 0:
@@ -1130,10 +1137,17 @@ PERSONALITY RULES:
 - If satellite data is old (>5 days), explicitly say recent farm actions won't be reflected.
 - Keep under 120 words. Farmer is in a field, not reading a report.
 
-CONFIDENCE RULES:
+CONFIDENCE LEVELS FOR EACH DATA SOURCE:
+- Satellite crop health: {confidence.get('satellite', {}).get('level', 'UNAVAILABLE')} confidence ({confidence.get('satellite', {}).get('days_old', '?')} days old)
+- Weather forecast: {confidence.get('weather', {}).get('level', 'MEDIUM')} confidence ({confidence.get('weather', {}).get('days_covered', '?')} days covered)
+- Mandi price trend: {confidence.get('price', {}).get('level', 'LOW')} confidence ({confidence.get('price', {}).get('data_points', 0)} data points)
+- Overall advisory: {confidence.get('overall', {}).get('level', 'MEDIUM')} confidence
+
+CONFIDENCE RULES (apply per data source above):
 - HIGH confidence data -> state as clear advice: "Kal paani dein."
 - MEDIUM confidence -> hedge: "Rate badh rahe hain, shayad aur badh sakte hain."
-- LOW confidence -> skip OR say "KVK se puchh lein."
+- LOW confidence -> skip entirely OR say "KVK se puchh lein."
+- UNAVAILABLE -> do not mention that data source at all.
 - NEVER guarantee yields, prices, or outcomes. Say "based on today's data".
 
 SAFETY RULES:
@@ -1154,6 +1168,7 @@ Local mandi: {local_mandi_name} — Rs {local_price}/quintal
 Extra earning at best mandi: Rs {price_advantage}/quintal more
 {trend_section}
 {spoilage_note}
+{top_mandis_section}
 {quantity_section}
 
 {satellite_section}
@@ -1179,9 +1194,11 @@ OUTPUT FORMAT (exactly 5 short sections, in this order):
 End with: "Yeh aaj ki data ke hisaab se hai. Final faisla aapka hai."
 """
 
-    response = gemini_client.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents=prompt,
+    # Run Gemini in thread pool to avoid blocking the asyncio event loop
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(
+        None,
+        lambda: gemini_client.models.generate_content(model="gemini-3-flash-preview", contents=prompt),
     )
 
     import re
@@ -2017,9 +2034,10 @@ async def _run_advisory(req: AdvisoryRequest):
         intent_text = req.intent or ""
         if intent_text:
             try:
-                extract_resp = gemini_client.models.generate_content(
-                    model="gemini-3-flash-preview",
-                    contents=f'Extract the crop name from this farmer\'s speech. Return ONLY the crop name in English (e.g., "Tomato", "Wheat", "Rice"). If no crop mentioned, return "Tomato".\n\nSpeech: "{intent_text}"',
+                _extract_prompt = f'Extract the crop name from this farmer\'s speech. Return ONLY the crop name in English (e.g., "Tomato", "Wheat", "Rice"). If no crop mentioned, return "Tomato".\n\nSpeech: "{intent_text}"'
+                _loop = asyncio.get_event_loop()
+                extract_resp = await _loop.run_in_executor(
+                    None, lambda: gemini_client.models.generate_content(model="gemini-3-flash-preview", contents=_extract_prompt)
                 )
                 crop = extract_resp.text.strip().strip('"').strip("'")
                 if not crop or len(crop) > 30:
@@ -2309,9 +2327,9 @@ Return ONLY valid JSON (no markdown, no explanation):
 }}"""
 
     try:
-        response = gemini_client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=prompt,
+        _loop = asyncio.get_event_loop()
+        response = await _loop.run_in_executor(
+            None, lambda: gemini_client.models.generate_content(model="gemini-3-flash-preview", contents=prompt)
         )
         text = response.text.strip()
         # Strip markdown code fences if present
@@ -2347,6 +2365,14 @@ TWILIO_WELCOME_NEW = {
 TWILIO_WELCOME_RETURNING = {
     "hi": "नमस्ते भाई! आपने पिछली बार {crop} के बारे में पूछा था {location} से। आज का update सुनना है या कोई नया सवाल?",
     "en": "Hello again! Last time you asked about {crop} from {location}. Want today's update or a new question?",
+    "ta": "வணக்கம்! கடந்த முறை {location} இலிருந்து {crop} பற்றி கேட்டீர்கள். இன்றைய update வேணுமா?",
+    "te": "నమస్కారం! గత సారి {location} నుండి {crop} గురించి అడిగారు. ఈరోజు update కావాలా?",
+    "bn": "নমস্কার! গতবার {location} থেকে {crop} নিয়ে জিজ্ঞেস করেছিলেন। আজকের update শুনবেন?",
+    "mr": "नमस्कार! मागच्या वेळी {location} वरून {crop} बद्दल विचारलं होतं। आजचा update हवा का?",
+    "gu": "નમસ્તે! ગઈ વખતે {location} થી {crop} વિશે પૂછ્યું હતું। આજનો update સાંભળશો?",
+    "kn": "ನಮಸ್ಕಾರ! ಕಳೆದ ಬಾರಿ {location} ಇಂದ {crop} ಬಗ್ಗೆ ಕೇಳಿದ್ದೀರಿ. ಇವತ್ತಿನ update ಬೇಕಾ?",
+    "ml": "നമസ്കാരം! കഴിഞ്ഞ തവണ {location} ൽ നിന്ന് {crop} കുറിച്ച് ചോദിച്ചിരുന്നു. ഇന്നത്തെ update വേണോ?",
+    "pa": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ! ਪਿਛਲੀ ਵਾਰ {location} ਤੋਂ {crop} ਬਾਰੇ ਪੁੱਛਿਆ ਸੀ। ਅੱਜ ਦਾ update ਸੁਣਨਾ?",
 }
 
 TWILIO_FOLLOWUP = {
@@ -2515,8 +2541,9 @@ Speech: "{speech_result}"
 Return JSON only:
 {{"crop": "<crop in English or null if not mentioned>", "location": "<location name or null>", "intent": "<full_advisory|weather_check|price_check|kvk_info|daily_action|repeat>", "language": "<detected 2-letter code: hi/en/ta/te/bn/mr/gu/kn/ml/pa>", "quantity_quintals": <number or 0 if not mentioned>, "sowing_date": "<YYYY-MM-DD or null if not mentioned>"}}"""
 
-        intent_resp = gemini_client.models.generate_content(
-            model="gemini-3-flash-preview", contents=intent_prompt
+        _loop = asyncio.get_event_loop()
+        intent_resp = await _loop.run_in_executor(
+            None, lambda: gemini_client.models.generate_content(model="gemini-3-flash-preview", contents=intent_prompt)
         )
         intent_text = intent_resp.text.strip()
         if intent_text.startswith("```"):
