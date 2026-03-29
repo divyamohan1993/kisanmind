@@ -40,6 +40,17 @@ type CallState = "pre-call" | "connecting" | "listening" | "processing" | "speak
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
+/** Strip markdown formatting from Gemini responses */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/#{1,6}\s*/g, '')
+    .replace(/`(.+?)`/g, '$1')
+    .replace(/CALL_COMPLETE:\s*/g, '')
+    .trim();
+}
+
 async function playTTS(text: string, language: string): Promise<HTMLAudioElement | null> {
   try {
     const res = await fetch(`${API_BASE}/api/tts`, {
@@ -84,10 +95,8 @@ export default function TalkPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [showLangPicker, setShowLangPicker] = useState(false);
   const [statusText, setStatusText] = useState("");
+  const [liveText, setLiveText] = useState("");  // Real-time speech display
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const callActiveRef = useRef(false);
   const sessionIdRef = useRef("");
@@ -131,123 +140,96 @@ export default function TalkPage() {
     setMessages((prev) => [...prev, { type, text, text_en: textEn || text, timestamp: new Date(), kind }]);
   }, []);
 
-  /* ---- Mic helpers ---- */
-  const startMic = useCallback(async (): Promise<void> => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    streamRef.current = stream;
-    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-      ? "audio/webm;codecs=opus"
-      : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
-    const recorder = new MediaRecorder(stream, { mimeType });
-    chunksRef.current = [];
-    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-    mediaRecorderRef.current = recorder;
-    recorder.start(250);
-  }, []);
-
-  const stopMic = useCallback((): Promise<Blob> => {
-    return new Promise((resolve) => {
-      const recorder = mediaRecorderRef.current;
-      if (!recorder || recorder.state === "inactive") { resolve(new Blob()); return; }
-      recorder.onstop = () => resolve(new Blob(chunksRef.current, { type: recorder.mimeType }));
-      recorder.stop();
-    });
-  }, []);
-
-  const releaseMic = useCallback(() => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-  }, []);
-
-  /* ---- Voice activity detection + recording ---- */
-  const SILENCE_TIMEOUT = 4;
-  const MAX_RECORDING = 30;
-
+  /* ---- Listen using Chrome Web Speech API — live transcription ---- */
   const listenOnce = useCallback(async (): Promise<string> => {
     if (!callActiveRef.current) return "";
     setCallState("listening");
-    setStatusText("");
+    setLiveText("");
 
-    await startMic();
-
-    const stream = streamRef.current;
-    let isSpeaking = false;
-    let silenceStart = 0;
-    let hasSpokeAtAll = false;
-    let analyser: AnalyserNode | null = null;
-
-    if (stream) {
-      try {
-        const audioCtx = new AudioContext();
-        const source = audioCtx.createMediaStreamSource(stream);
-        analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 512;
-        analyser.smoothingTimeConstant = 0.4;
-        source.connect(analyser);
-      } catch { /* fallback to fixed timer */ }
-    }
-
-    const getAudioLevel = (): number => {
-      if (!analyser) return 0;
-      const data = new Uint8Array(analyser.frequencyBinCount);
-      analyser.getByteFrequencyData(data);
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) sum += data[i];
-      return sum / data.length;
+    // Map language codes to BCP47 for Web Speech API
+    const speechLang: Record<string, string> = {
+      hi: "hi-IN", en: "en-IN", ta: "ta-IN", te: "te-IN", bn: "bn-IN",
+      mr: "mr-IN", gu: "gu-IN", kn: "kn-IN", ml: "ml-IN", pa: "pa-IN",
+      or: "or-IN", as: "as-IN",
     };
 
-    const result = await new Promise<"timeout" | "silence" | "cancelled">((resolve) => {
-      const startTime = Date.now();
-      const interval = setInterval(() => {
-        if (!callActiveRef.current) { clearInterval(interval); resolve("cancelled"); return; }
-        const elapsed = (Date.now() - startTime) / 1000;
-        if (elapsed >= MAX_RECORDING) { clearInterval(interval); resolve("timeout"); return; }
+    return new Promise((resolve) => {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        // Fallback to backend STT if Web Speech API not available
+        resolve("");
+        return;
+      }
 
-        const level = getAudioLevel();
-        const speaking = level > 30;
+      const recognition = new SpeechRecognition();
+      recognition.lang = speechLang[language] || "hi-IN";
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
 
-        if (speaking) {
-          isSpeaking = true;
-          hasSpokeAtAll = true;
-          silenceStart = 0;
-        } else if (isSpeaking && !speaking) {
-          isSpeaking = false;
-          silenceStart = Date.now();
-        }
+      let finalTranscript = "";
+      let timeout: ReturnType<typeof setTimeout>;
 
-        if (hasSpokeAtAll && !isSpeaking && silenceStart > 0) {
-          const silenceSec = (Date.now() - silenceStart) / 1000;
-          if (silenceSec >= SILENCE_TIMEOUT) {
-            clearInterval(interval);
-            resolve("silence");
+      recognition.onresult = (event: any) => {
+        let interim = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript + " ";
+          } else {
+            interim += event.results[i][0].transcript;
           }
         }
+        // Show live text as farmer speaks
+        setLiveText(finalTranscript + interim);
 
-        if (!hasSpokeAtAll && elapsed > 8) {
-          clearInterval(interval);
-          resolve("timeout");
+        // Reset silence timeout on each result
+        clearTimeout(timeout);
+        timeout = setTimeout(() => {
+          recognition.stop();
+        }, 3000); // 3 sec silence after speech
+      };
+
+      recognition.onerror = () => {
+        clearTimeout(timeout);
+        resolve(finalTranscript.trim());
+      };
+
+      recognition.onend = () => {
+        clearTimeout(timeout);
+        setLiveText("");
+        resolve(finalTranscript.trim());
+      };
+
+      // Auto-stop after 30 seconds max
+      const maxTimeout = setTimeout(() => {
+        recognition.stop();
+      }, 30000);
+
+      // Stop if call ends
+      const checkInterval = setInterval(() => {
+        if (!callActiveRef.current) {
+          clearInterval(checkInterval);
+          clearTimeout(maxTimeout);
+          recognition.stop();
         }
-      }, 200);
+      }, 500);
+
+      recognition.onend = () => {
+        clearTimeout(timeout);
+        clearTimeout(maxTimeout);
+        clearInterval(checkInterval);
+        setLiveText("");
+        resolve(finalTranscript.trim());
+      };
+
+      recognition.start();
+
+      // If no speech at all after 8 seconds, stop
+      timeout = setTimeout(() => {
+        recognition.stop();
+      }, 8000);
     });
-
-    if (result === "cancelled") { releaseMic(); return ""; }
-
-    const blob = await stopMic();
-    releaseMic();
-    if (blob.size === 0 || !hasSpokeAtAll) return "";
-
-    // STT
-    setCallState("processing");
-    setStatusText("");
-    try {
-      const fd = new FormData();
-      fd.append("audio", blob, "recording.webm");
-      fd.append("language", language);
-      const res = await fetch(`${API_BASE}/api/stt`, { method: "POST", body: fd });
-      const d = await res.json();
-      return d.transcript || "";
-    } catch { return ""; }
-  }, [language, startMic, stopMic, releaseMic]);
+  }, [language]);
 
   /* ---- Multi-turn conversation loop ---- */
   const conversationLoop = useCallback(async (): Promise<void> => {
@@ -320,20 +302,22 @@ export default function TalkPage() {
       setCallState("processing");
       setStatusText("");
 
-      // Show trivia only on first data fetch (not follow-ups)
+      // Speak trivia only on first data fetch (not follow-ups)
       let triviaDone = false;
       if (!advisoryDeliveredRef.current) {
         const TRIVIA = [
-          "Please wait... fetching live satellite data and mandi prices for you.",
-          "Did you know? Selling at the right mandi can earn Rs 200-500 more per quintal.",
+          "Your call is important to us. We are fetching satellite data and mandi prices for you.",
+          "Did you know? Selling at the right mandi can earn 200 to 500 rupees more per quintal.",
           "We use European Sentinel-2 satellite to check your crop health from space.",
-          "Weather-informed farming reduces crop loss by up to 30%.",
         ];
         (async () => {
           for (const fact of TRIVIA) {
             if (triviaDone || !callActiveRef.current) break;
+            setCallState("speaking");
             addMessage("kisanmind", fact, "status", fact);
-            await new Promise(r => setTimeout(r, 3000));
+            const triviaAudio = await playTTS(fact, language);
+            await waitForAudioEnd(triviaAudio);
+            if (triviaDone) break;
           }
         })();
       }
@@ -353,22 +337,37 @@ export default function TalkPage() {
         triviaDone = true;
         const chatData = await chatResp.json();
 
-        // Speak Gemini's response
+        // Strip markdown and speak
         setCallState("speaking");
+        const cleanResponse = stripMarkdown(chatData.response);
+        const cleanResponseEn = stripMarkdown(chatData.response_en || chatData.response);
         const kind = chatData.has_advisory ? "advisory" : "conversation";
         if (chatData.has_advisory) advisoryDeliveredRef.current = true;
-        addMessage("kisanmind", chatData.response, kind, chatData.response_en || chatData.response);
-        const respAudio = await playTTS(chatData.response, language);
+        addMessage("kisanmind", cleanResponse, kind, cleanResponseEn);
+
+        // Play beep before advisory
+        if (chatData.has_advisory) {
+          try {
+            const beepRes = await fetch(`${API_BASE}/api/beep`);
+            if (beepRes.ok) {
+              const beepData = await beepRes.json();
+              const beep = new Audio(`data:audio/wav;base64,${beepData.audio_base64}`);
+              await beep.play();
+              await waitForAudioEnd(beep);
+            }
+          } catch { /* beep is non-critical */ }
+        }
+
+        const respAudio = await playTTS(cleanResponse, language);
         currentAudioRef.current = respAudio;
         await waitForAudioEnd(respAudio);
 
-        // If Gemini detected goodbye, end the call
-        if (chatData.call_complete) {
+        // Auto-end: if advisory delivered OR goodbye detected, end the call
+        if (chatData.call_complete || chatData.has_advisory) {
           callActiveRef.current = false;
           setCallState("ended");
           return;
         }
-        // Otherwise keep listening — farmer may ask more
       } catch {
         triviaDone = true;
         addMessage("kisanmind", "Technical issue. Please try again.", "status", "Technical issue. Please try again.");
@@ -394,11 +393,10 @@ export default function TalkPage() {
     callActiveRef.current = false;
     currentAudioRef.current?.pause();
     currentAudioRef.current = null;
-    mediaRecorderRef.current?.stop();
-    releaseMic();
     setCallState("ended");
     setStatusText("");
-  }, [releaseMic]);
+    setLiveText("");
+  }, []);
 
   /* ---- UI ---- */
   const isInCall = !["pre-call", "ended"].includes(callState);
@@ -561,8 +559,15 @@ export default function TalkPage() {
                 End Call
               </button>
               {callState === "listening" && (
-                <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                  <Mic size={12} className="text-[#138808] animate-pulse" /> Listening...
+                <div className="flex flex-col items-center gap-1">
+                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <Mic size={12} className="text-[#138808] animate-pulse" /> Listening...
+                  </div>
+                  {liveText && (
+                    <div className="text-xs text-[#1a3a5c] font-medium max-w-[80vw] text-center truncate">
+                      {liveText}
+                    </div>
+                  )}
                 </div>
               )}
               {callState === "speaking" && (
