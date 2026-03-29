@@ -382,7 +382,7 @@ async def reverse_geocode(lat: float, lon: float) -> dict:
 
 
 AGMARKNET_CROP_NAMES = {
-    "okra": ["lady finger", "ladyfinger", "bhindi", "okra"],
+    "okra": ["Bhindi(Ladies Finger)", "Lady Finger", "bhindi", "okra"],
     "tomato": ["tomato"],
     "potato": ["potato"],
     "onion": ["onion"],
@@ -446,7 +446,7 @@ async def fetch_mandi_prices(crop: str, state: str) -> list[dict]:
                 "api-key": AGMARKNET_API_KEY,
                 "format": "json",
                 "limit": 20,
-                "filters[commodity]": variant.title(),
+                "filters[commodity]": variant if variant[0].isupper() else variant.title(),
                 "filters[state]": state,
             }
             headers = {
