@@ -615,6 +615,31 @@ def analyze_price_trend(mandis: list[dict]) -> dict:
     }
 
 
+async def fetch_price_history(crop: str) -> dict:
+    """Fetch 90-day price history from GCS cache for price prediction context."""
+    crop_key = crop.lower().strip().replace(" ", "_").replace("(", "").replace(")", "")
+    cache_key = f"price_history:{crop_key}"
+
+    # Try L1/L2 cache first (24h TTL for historical data)
+    cached = await cache_get(cache_key, 24 * 60 * 60)
+    if cached:
+        return cached
+
+    # Try GCS price-history bucket
+    url = f"https://storage.googleapis.com/{GCS_CACHE_BUCKET}/price-history/{crop_key}.json"
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                await cache_set(cache_key, data)
+                return data
+    except Exception as e:
+        log.warning(f"Price history fetch failed for {crop}: {e}")
+
+    return {}
+
+
 async def get_distances(origin_lat: float, origin_lon: float, mandis: list[dict]) -> list[dict]:
     """Get real driving distances from Google Maps Distance Matrix API for each mandi."""
     if not mandis:
@@ -1149,6 +1174,7 @@ async def generate_advisory_with_gemini(
     cross_validation: list[dict] = None,
     satellite_extras: dict = None,
     farmer_context: str = "",
+    price_history: dict = None,
 ) -> str:
     """Send pre-computed inferences to Gemini and get a human, conversational advisory."""
     language_name = LANGUAGE_NAMES.get(language, "Hindi")
@@ -1220,6 +1246,25 @@ async def generate_advisory_with_gemini(
 PRICE TREND ({price_trend.get('confidence', 'LOW')} confidence):
   {price_trend.get('detail', 'No trend data.')}
   Trend direction: {price_trend.get('trend', 'unknown').upper()}"""
+
+    # Price history section
+    history_section = ""
+    if price_history and price_history.get("daily_prices"):
+        prices = price_history["daily_prices"]
+        hist = price_history
+        history_section = f"""
+PRICE HISTORY (90-day analysis, {len(prices)} days of data):
+  90-day range: Rs {hist.get('price_range_90d', {}).get('min', '?')} – Rs {hist.get('price_range_90d', {}).get('max', '?')}/quintal
+  90-day average: Rs {hist.get('price_range_90d', {}).get('avg', '?')}/quintal
+  7-day volatility: {round(hist.get('volatility_7d', 0) * 100, 1)}%
+  30-day volatility: {round(hist.get('volatility_30d', 0) * 100, 1)}%
+  Weather impact: {hist.get('weather_correlation', {}).get('rain_impact', 'unknown')}
+  Sell timing signal: {hist.get('prediction_signals', {}).get('sell_timing', 'unknown')}
+
+  Use this historical context to advise the farmer on WHEN to sell — not just WHERE.
+  If prices are above 90-day average → advise selling soon (prices may correct).
+  If prices are below average → advise holding if storage is available.
+  If high volatility → advise selling in batches to hedge."""
 
     # Spoilage info for best mandi
     spoilage_note = ""
@@ -1335,6 +1380,7 @@ Local mandi: {local_mandi_name} — Rs {local_price}/quintal
   Net profit: Rs {local_mandi.get('net_profit_per_quintal', '?') if local_mandi else '?'}/quintal
 Extra earning at best mandi: Rs {price_advantage}/quintal more
 {trend_section}
+{history_section}
 {spoilage_note}
 {top_mandis_section}
 {quantity_section}
@@ -2507,6 +2553,9 @@ async def _run_advisory(req: AdvisoryRequest):
     price_trend = analyze_price_trend(mandis)
     log.info(f"Price trend: {price_trend['trend']} ({price_trend['trend_percent']}%)")
 
+    # Fetch 90-day price history for prediction context
+    price_history = await fetch_price_history(crop)
+
     # 4c. Get historical weather for real GDD calculation
     historical_weather = await hist_weather_task
     sowing_date = req.sowing_date or ""
@@ -2565,6 +2614,7 @@ async def _run_advisory(req: AdvisoryRequest):
         quantity_quintals=req.quantity_quintals,
         cross_validation=cross_validation,
         satellite_extras=satellite_extras,
+        price_history=price_history,
     )
 
     response_data = {

@@ -35,3 +35,31 @@ body {
 button, a {
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* WCAG 2.2 AAA — Focus Indicators (2.4.7) */
+:focus-visible {
+  outline: 3px solid #1a365d;
+  outline-offset: 2px;
+}
+
+button:focus-visible, a:focus-visible, input:focus-visible {
+  outline: 3px solid #1a365d;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 6px rgba(26, 54, 93, 0.2);
+}
+
+/* WCAG 2.2 AAA — Text Spacing (1.4.12) */
+p, li, span, div {
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  word-spacing: 0.05em;
+}
+
+/* WCAG 2.2 AAA — Reduced Motion (2.3.3) */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
