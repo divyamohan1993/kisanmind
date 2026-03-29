@@ -2693,7 +2693,8 @@ Return ONLY 3 facts, one per line. No numbering, no bullets. Keep each under 20 
         if req.language != "en":
             try:
                 tc = translate.Client()
-                facts = [html_mod.unescape(tc.translate(f, target_language=req.language, source_language="en")["translatedText"]) for f in facts]
+                import html as _html
+                facts = [_html.unescape(tc.translate(f, target_language=req.language, source_language="en")["translatedText"]) for f in facts]
             except Exception:
                 pass
 
