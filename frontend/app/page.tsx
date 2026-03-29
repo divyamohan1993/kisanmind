@@ -280,6 +280,7 @@ export default function TalkPage() {
                     <Phone size={24} /> Call KisanMind
                   </button>
                   <p className="text-xs text-gray-700 mt-3">Tap to speak with your AI farming advisor in your language</p>
+                  <p className="text-xs text-gray-700 mt-1">Advice generation fetches live satellite + mandi + weather data — may take up to 1 minute. You will hear a beep when ready.</p>
                 </>
               )}
             </div>
@@ -367,13 +368,15 @@ export default function TalkPage() {
               ))}
 
               {(callState === "processing" || callState === "connecting") && (
-                <div className="flex justify-start" role="status" aria-live="assertive" aria-busy="true" aria-label={callState === "connecting" ? "Connecting" : "Processing"}>
-                  <div className="bg-white border border-gray-200 rounded-lg px-4 py-2 shadow-sm">
-                    <div className="flex gap-1.5">
+                <div className="flex justify-start" role="status" aria-live="assertive" aria-busy="true" aria-label={callState === "connecting" ? "Connecting" : "Generating advice — may take up to 1 minute"}>
+                  <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm">
+                    <div className="flex gap-1.5 mb-2">
                       <span className="h-2 w-2 rounded-full bg-[#138808] animate-bounce" />
                       <span className="h-2 w-2 rounded-full bg-[#FF9933] animate-bounce [animation-delay:150ms]" />
                       <span className="h-2 w-2 rounded-full bg-[#1a365d] animate-bounce [animation-delay:300ms]" />
                     </div>
+                    <p className="text-xs text-gray-700">{callState === "connecting" ? "Connecting..." : "Fetching satellite, mandi & weather data..."}</p>
+                    <p className="text-xs text-gray-700 mt-0.5">This may take up to 1 minute. A beep will alert you when ready.</p>
                   </div>
                 </div>
               )}
