@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Mic, Phone, PhoneOff, Sun, CloudRain, Cloud, Leaf, Volume2, TrendingUp, MapPin, Thermometer } from "lucide-react";
+import { Mic, Phone, PhoneOff, Sun, CloudRain, Cloud, Leaf, Volume2, TrendingUp, MapPin, Thermometer, CheckCircle, Droplets } from "lucide-react";
 import Link from "next/link";
 import useGeolocation from "../hooks/useGeolocation";
 
@@ -548,77 +548,98 @@ export default function TalkPage() {
           </div>
         )}
 
-        {/* Call summary — shown after call ends */}
+        {/* Call summary — visual, icon-heavy for illiterate farmers */}
         {callState === "ended" && summary && (
           <div className="mx-auto max-w-md space-y-4 mt-4">
             <h3 className="text-center text-lg font-bold text-white/80">
               {t(language, "callSummary")}
             </h3>
 
-            {/* Location + crop */}
-            {(summary.location || summary.crop) && (
-              <div className="flex items-center gap-3 rounded-xl bg-white/5 border border-white/10 p-4">
-                <MapPin size={24} className="text-sky shrink-0" />
-                <div>
-                  {summary.location && <div className="font-medium">{summary.location}</div>}
-                  {summary.crop && <div className="text-sm text-white/50">{language === "en" ? "Crop" : "फसल"}: {summary.crop}</div>}
+            {/* Location — big icon + name */}
+            {summary.location && (
+              <div className="flex items-center gap-4 rounded-xl bg-white/5 border border-white/10 p-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-sky/20">
+                  <MapPin size={24} className="text-sky" />
                 </div>
+                <div className="text-lg font-bold">{summary.location}</div>
               </div>
             )}
 
-            {/* Best mandi */}
+            {/* Best mandi — BIG price visual */}
             {summary.bestMandi && (
-              <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-4">
-                <div className="flex items-center gap-3">
-                  <TrendingUp size={24} className="text-emerald-400 shrink-0" />
-                  <div className="flex-1">
-                    <div className="text-xs text-emerald-400/70 uppercase tracking-wider">
-                      {t(language, "bestMandi")}
-                    </div>
-                    <div className="text-xl font-bold">{summary.bestMandi}</div>
-                    {summary.bestPrice && (
-                      <div className="text-2xl font-bold text-emerald-400">₹{summary.bestPrice.toLocaleString()}/qtl</div>
-                    )}
-                    {summary.distanceKm && (
-                      <div className="text-xs text-white/40 mt-1">{summary.distanceKm} km away</div>
-                    )}
+              <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-5 text-center">
+                <div className="flex justify-center mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/20">
+                    <TrendingUp size={28} className="text-emerald-400" />
                   </div>
                 </div>
-                {summary.localMandi && summary.localPrice && summary.bestPrice && (
-                  <div className="mt-3 pt-3 border-t border-white/10 text-sm text-white/60">
-                    {language === "en" ? "vs" : "बनाम"} {summary.localMandi}: ₹{summary.localPrice.toLocaleString()}/qtl
-                    {summary.bestPrice > summary.localPrice && (
-                      <span className="text-emerald-400 font-medium ml-2">
-                        +₹{(summary.bestPrice - summary.localPrice).toLocaleString()}/qtl
-                      </span>
-                    )}
+                <div className="text-sm text-emerald-400/70">{t(language, "bestMandi")}</div>
+                <div className="text-2xl font-bold mt-1">{summary.bestMandi}</div>
+                {summary.bestPrice && (
+                  <div className="text-4xl font-black text-emerald-400 mt-1">₹{summary.bestPrice.toLocaleString()}</div>
+                )}
+                {summary.distanceKm && (
+                  <div className="text-sm text-white/40 mt-1">{summary.distanceKm} km</div>
+                )}
+                {summary.localMandi && summary.localPrice && summary.bestPrice && summary.bestPrice > summary.localPrice && (
+                  <div className="mt-3 pt-3 border-t border-emerald-500/20 text-lg font-bold text-emerald-400">
+                    +₹{(summary.bestPrice - summary.localPrice).toLocaleString()}
+                    <span className="text-sm font-normal text-white/40 ml-1">/ qtl</span>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Weather */}
+            {/* Weather — visual cards */}
             {summary.weatherDays && summary.weatherDays.length > 0 && (
               <div className="rounded-xl bg-sky/5 border border-sky/20 p-4">
                 <div className="flex items-center gap-2 mb-3">
                   <Thermometer size={20} className="text-sky" />
-                  <span className="text-xs text-sky/70 uppercase tracking-wider">
-                    {t(language, "weather")}
-                  </span>
+                  <span className="text-sm font-bold text-sky/80">{t(language, "weather")}</span>
                 </div>
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {summary.weatherDays.slice(0, 5).map((d, i) => (
-                    <div key={i} className="flex-shrink-0 text-center bg-white/5 rounded-lg px-3 py-2 min-w-[70px]">
+                    <div key={i} className={`flex-shrink-0 text-center rounded-xl px-3 py-3 min-w-[75px] ${d.precipitation_mm > 2 ? "bg-sky/10 border border-sky/20" : "bg-white/5"}`}>
                       <div className="text-[10px] text-white/40">{d.date?.split("-").slice(1).join("/")}</div>
-                      {d.precipitation_mm > 0 ? <CloudRain size={18} className="mx-auto my-1 text-sky" /> : <Sun size={18} className="mx-auto my-1 text-amber-400" />}
-                      <div className="text-xs font-medium">{d.max_temp_c}°</div>
-                      <div className="text-[10px] text-white/40">{d.min_temp_c}°</div>
-                      {d.precipitation_mm > 0 && <div className="text-[10px] text-sky">{d.precipitation_mm}mm</div>}
+                      {d.precipitation_mm > 2 ? <CloudRain size={24} className="mx-auto my-1 text-sky" /> : <Sun size={24} className="mx-auto my-1 text-amber-400" />}
+                      <div className="text-sm font-bold">{d.max_temp_c}°</div>
+                      {d.precipitation_mm > 0 && <div className="text-xs text-sky font-medium">{d.precipitation_mm}mm</div>}
                     </div>
                   ))}
                 </div>
               </div>
             )}
+
+            {/* Advisory key points — visual icons for illiterate farmers */}
+            {summary.advisory && (
+              <div className="rounded-xl bg-white/5 border border-white/10 p-4 space-y-3">
+                <div className="text-sm font-bold text-white/60 mb-2">
+                  {language === "en" ? "Key Advice" : language === "hi" ? "मुख्य सलाह" : t(language, "adviceReady")}
+                </div>
+                {summary.advisory.split(/[।.!\n]+/).filter(s => s.trim().length > 15).slice(0, 5).map((point, i) => {
+                  const lower = point.toLowerCase();
+                  const isWarning = lower.includes("बारिश") || lower.includes("rain") || lower.includes("barish") || lower.includes("khatr");
+                  const isSell = lower.includes("मंडी") || lower.includes("mandi") || lower.includes("बेच") || lower.includes("sell") || lower.includes("₹");
+                  const isHealth = lower.includes("satellite") || lower.includes("सैटेलाइट") || lower.includes("fasal") || lower.includes("फसल") || lower.includes("sehat") || lower.includes("सेहत");
+                  return (
+                    <div key={i} className={`flex items-start gap-3 rounded-lg p-3 ${isWarning ? "bg-amber-500/10 border border-amber-500/20" : isSell ? "bg-emerald-500/10 border border-emerald-500/20" : isHealth ? "bg-sky/10 border border-sky/20" : "bg-white/5"}`}>
+                      <div className="shrink-0 mt-0.5">
+                        {isWarning ? <CloudRain size={20} className="text-amber-400" /> : isSell ? <TrendingUp size={20} className="text-emerald-400" /> : isHealth ? <Leaf size={20} className="text-sky" /> : <CheckCircle size={20} className="text-white/40" />}
+                      </div>
+                      <div className="text-sm text-white/80 leading-relaxed">{point.trim()}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Play advisory again */}
+            <button
+              onClick={() => { if (summary.advisory) playTTS(summary.advisory, language); }}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-white/5 border border-white/10 py-3 text-sm text-white/60 hover:bg-white/10"
+            >
+              <Volume2 size={16} /> {language === "en" ? "Play again" : language === "hi" ? "फिर से सुनें" : t(language, "speaking")}
+            </button>
 
             {/* New call button */}
             <button

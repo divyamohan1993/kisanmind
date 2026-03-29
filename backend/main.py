@@ -539,35 +539,27 @@ async def generate_advisory_with_gemini(
     else:
         satellite_section = "Satellite crop health data: unavailable"
 
-    prompt = f"""You are KisanMind, a friendly agricultural advisor talking to an Indian farmer on a phone call.
-Speak in {language_name} language as if you're their trusted friend/elder.
+    prompt = f"""You are KisanMind, a friendly agricultural advisor. Generate advisory in Hindi (Devanagari script).
 
-STRICT RULES:
-- Use ONLY plain text. NO markdown. NO asterisks (*), NO bold, NO bullet points, NO numbered lists.
-- Use simple spoken language — this will be read aloud by text-to-speech.
-- Use local units (quintal, bigha, rupaye).
-- ONLY state facts from the data below. DO NOT invent or assume anything the farmer said.
-- DO NOT hallucinate farmer's statements. If the farmer didn't mention something, don't claim they did.
-- For any pesticide, fungicide, or chemical treatment: DO NOT recommend brands or dosages. Instead say "apne nazdeeki Krishi Vigyan Kendra (KVK) se sampark karein" and mention KVK helpline 1800-180-1551.
-- Keep it under 200 words. This is a phone conversation, not an essay.
+RULES:
+- Plain text only. NO markdown, NO asterisks, NO bold, NO bullets, NO numbered lists.
+- Simple conversational tone — like talking to a friend on phone.
+- Use local units (क्विंटल, बीघा).
+- ONLY state facts from data below. DO NOT invent anything.
+- For pesticide/chemical: refer to Krishi Vigyan Kendra (KVK), helpline 1800-180-1551.
+- Under 200 words.
 
-REAL DATA (use ONLY this):
+DATA:
 Location: {location_name}, {state}
 Crop: {crop}
-Mandi prices today:
-  Best: {best_mandi['market']} — {best_mandi['modal_price']} rupaye per quintal, {best_mandi.get('distance_km', '?')} km door, {best_mandi.get('duration_text', '?')} ka raasta
-  Local: {local_mandi_name} — {local_price} rupaye per quintal
-  Fayda: {best_mandi['market']} mein {price_advantage} rupaye zyada milenge per quintal
+Best mandi: {best_mandi['market']} — ₹{best_mandi['modal_price']}/क्विंटल, {best_mandi.get('distance_km', '?')} km, {best_mandi.get('duration_text', '?')}
+Local mandi: {local_mandi_name} — ₹{local_price}/क्विंटल
+Fayda: ₹{price_advantage}/क्विंटल ज्यादा
 Weather: {weather['summary']}
 {satellite_section}
 
-Cover:
-1. Where to sell — best mandi with price and distance
-2. Weather — what to do or avoid in next 2-3 days
-3. Crop health from satellite — explain in simple terms (dont say NDVI, say "satellite se fasal ki sehat dekhi")
-4. If any problem detected, refer to nearest KVK (helpline: 1800-180-1551)
-
-End with: "Yeh data aaj ki AgMarkNet, satellite aur mausam report se hai. Final faisla aap ka hai."
+Cover: best mandi, weather actions, crop health, KVK if needed.
+End: "यह डेटा आज की AgMarkNet, सैटेलाइट और मौसम रिपोर्ट से है। अंतिम फैसला आपका है।"
 """
 
     response = gemini_client.models.generate_content(
@@ -577,7 +569,7 @@ End with: "Yeh data aaj ki AgMarkNet, satellite aur mausam report se hai. Final 
 
     import re
     text = response.text
-    # Strip ALL markdown formatting — this text will be spoken aloud via TTS
+    # Strip ALL markdown formatting
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'\*(.+?)\*', r'\1', text)
     text = re.sub(r'#{1,6}\s*', '', text)
@@ -586,6 +578,25 @@ End with: "Yeh data aaj ki AgMarkNet, satellite aur mausam report se hai. Final 
     text = re.sub(r'`(.+?)`', r'\1', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = text.strip()
+
+    # Advisory is generated in Hindi. If user wants a different language, translate it.
+    if language not in ("hi", "en"):
+        try:
+            translate_client = translate.Client()
+            result = translate_client.translate(text, target_language=language, source_language="hi")
+            import html
+            text = html.unescape(result["translatedText"])
+            log.info(f"Translated advisory from Hindi to {language}")
+        except Exception as e:
+            log.warning(f"Translation to {language} failed, keeping Hindi: {e}")
+    elif language == "en":
+        try:
+            translate_client = translate.Client()
+            result = translate_client.translate(text, target_language="en", source_language="hi")
+            import html
+            text = html.unescape(result["translatedText"])
+        except Exception as e:
+            log.warning(f"Translation to English failed: {e}")
 
     # Hallucination verification runs in BACKGROUND — don't block the response
     # The advisory is already constrained by the strict prompt rules above
