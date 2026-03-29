@@ -191,9 +191,21 @@ _init_earth_engine()
 _ee_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ee")
 
 # ---------------------------------------------------------------------------
+# Local satellite cache (pre-computed, instant lookup)
+# ---------------------------------------------------------------------------
+from backend.satellite_cache import SatelliteCache
+
+_sat_cache_dir = Path(__file__).resolve().parent.parent / "data" / "satellite_cache"
+_sat_cache = SatelliteCache(str(_sat_cache_dir))
+if _sat_cache.is_loaded:
+    log.info(f"Satellite cache: {_sat_cache.stats()['total_points']} points loaded ({_sat_cache.stats()['cache_age_hours']}h old)")
+else:
+    log.info("Satellite cache: not available — will use live Earth Engine calls")
+
+# ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
-app = FastAPI(title="KisanMind API", version="1.0.0")
+app = FastAPI(title="KisanMind API", version="2.0.0")
 
 # CORS — allow all origins (Cloud Run error responses drop CORS headers
 # with restricted origins, causing browser failures on 500s)
@@ -1829,7 +1841,7 @@ def _compute_smap_soil_moisture(lat: float, lon: float) -> dict:
     start_date = end_date - timedelta(days=5)
 
     collection = (
-        ee.ImageCollection("NASA/SMAP/SPL4SMGP/007")
+        ee.ImageCollection("NASA/SMAP/SPL4SMGP/008")
         .filterBounds(point)
         .filterDate(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
         .select(["sm_surface", "sm_rootzone", "sm_surface_wetness"])
@@ -1962,37 +1974,53 @@ async def beep():
 
 @app.get("/api/health")
 async def health():
+    sat_cache_info = _sat_cache.stats() if _sat_cache.is_loaded else {"loaded": False}
     return {
         "status": "healthy",
         "service": "KisanMind API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "apis": {
             "google_maps": bool(GOOGLE_MAPS_API_KEY),
             "agmarknet": bool(AGMARKNET_API_KEY),
             "gemini": bool(GEMINI_API_KEY),
             "weather": "Open-Meteo (free)",
             "earth_engine": f"{'active' if EE_INITIALIZED else 'unavailable'} (project: {EE_PROJECT})",
+            "satellite_cache": sat_cache_info,
         },
     }
 
 
 @app.post("/api/ndvi")
 async def get_ndvi(req: NDVIRequest):
-    """Get satellite vegetation indices (NDVI, EVI, NDWI) from Google Earth Engine."""
-    if not EE_INITIALIZED:
-        raise HTTPException(503, "Earth Engine is not initialized. Satellite data unavailable.")
+    """Get satellite vegetation indices — local cache first, Earth Engine fallback."""
     log.info(f"NDVI request: lat={req.latitude}, lon={req.longitude}")
 
+    # 1. Try local satellite cache (instant, <1ms)
+    if _sat_cache.is_loaded:
+        cached_sat = _sat_cache.lookup_enriched(req.latitude, req.longitude)
+        if cached_sat.get("cache_hit") and cached_sat.get("ndvi_data"):
+            result = cached_sat["ndvi_data"]
+            result["cached"] = True
+            result["cache_source"] = "local_precomputed"
+            result["cache_distance_km"] = cached_sat.get("cache_distance_km", 0)
+            log.info(f"NDVI from local cache ({cached_sat.get('cache_distance_km', 0):.1f}km from exact)")
+            return result
+
+    # 2. Try L1/L2 advisory cache
     cache_key = f"ndvi:{round(req.latitude, 2)}:{round(req.longitude, 2)}"
     cached = await cache_get(cache_key, _NDVI_TTL)
     if cached is not None:
-        return {**cached, "cached": True}
+        return {**cached, "cached": True, "cache_source": "l1_l2"}
 
+    # 3. Fall back to live Earth Engine
+    if not EE_INITIALIZED:
+        raise HTTPException(503, "Satellite data unavailable — no cache and Earth Engine not initialized.")
     result = await fetch_ndvi(req.latitude, req.longitude)
     if result is None:
         raise HTTPException(404, "No satellite data available for this location.")
     await cache_set(cache_key, result)
     result["cached"] = False
+    result["cache_source"] = "live_earth_engine"
     return result
 
 
@@ -2048,14 +2076,34 @@ async def _run_advisory(req: AdvisoryRequest):
             crop = "Tomato"
         log.info(f"Auto-detected crop: {crop}")
 
-    # 1. Geocode + weather + NDVI + KVK + historical weather + extra satellites — ALL PARALLEL
+    # 0. Try local satellite cache FIRST (instant, <1ms, no EE call)
+    sat_from_cache = False
+    ndvi_data = None
+    ndvi_trajectory = {}
+    satellite_extras = {}
+
+    if _sat_cache.is_loaded:
+        cached_sat = _sat_cache.lookup_enriched(req.latitude, req.longitude)
+        if cached_sat.get("cache_hit"):
+            ndvi_data = cached_sat.get("ndvi_data")
+            satellite_extras = cached_sat.get("satellite_extras", {})
+            sat_from_cache = True
+            log.info(f"Satellite data from local cache ({cached_sat.get('cache_distance_km', 0):.1f}km, computed {cached_sat.get('computed_at', '?')})")
+
+    # 1. Geocode + weather + KVK + historical weather — ALL PARALLEL
+    #    Only launch live EE tasks if cache missed
     location_task = asyncio.create_task(reverse_geocode(req.latitude, req.longitude))
     weather_task = asyncio.create_task(fetch_weather(req.latitude, req.longitude))
-    ndvi_task = asyncio.create_task(fetch_ndvi(req.latitude, req.longitude))
     kvk_task = asyncio.create_task(find_nearest_kvk(req.latitude, req.longitude))
     hist_weather_task = asyncio.create_task(fetch_historical_weather(req.latitude, req.longitude, days_back=120))
-    # SAR soil moisture + MODIS LST + SMAP root-zone moisture (best-effort)
-    sat_extras_task = asyncio.create_task(fetch_satellite_extras(req.latitude, req.longitude))
+
+    # Live EE calls only if cache missed
+    ndvi_task = None
+    sat_extras_task = None
+    if not sat_from_cache:
+        ndvi_task = asyncio.create_task(fetch_ndvi(req.latitude, req.longitude))
+        sat_extras_task = asyncio.create_task(fetch_satellite_extras(req.latitude, req.longitude))
+        log.info("No satellite cache hit — launching live Earth Engine calls")
 
     location = await location_task
     log.info(f"Location: {location}")
@@ -2069,33 +2117,32 @@ async def _run_advisory(req: AdvisoryRequest):
     weather = await weather_task
     mandis = await distances_task
 
-    # 4. NDVI — best-effort with timeout
-    ndvi_data = None
-    ndvi_trajectory = {}
-    try:
-        ndvi_data = await asyncio.wait_for(ndvi_task, timeout=3.0)
-        if ndvi_data:
-            log.info(f"NDVI: {ndvi_data['ndvi']}, Health: {ndvi_data['health']}")
-    except (asyncio.TimeoutError, Exception):
-        log.info("NDVI skipped (slow/unavailable) — proceeding without satellite data")
-
-    # NDVI trajectory — best-effort, don't block
-    if ndvi_data:
+    # 4. NDVI — only if not already from cache
+    if not sat_from_cache and ndvi_task:
         try:
-            ndvi_trajectory = await asyncio.wait_for(
-                fetch_ndvi_trajectory(req.latitude, req.longitude), timeout=5.0
-            )
+            ndvi_data = await asyncio.wait_for(ndvi_task, timeout=3.0)
+            if ndvi_data:
+                log.info(f"NDVI (live EE): {ndvi_data['ndvi']}, Health: {ndvi_data['health']}")
         except (asyncio.TimeoutError, Exception):
-            log.info("NDVI trajectory skipped — using basic NDVI only")
+            log.info("NDVI skipped (slow/unavailable) — proceeding without satellite data")
 
-    # 4-extra. Get additional satellite data (SAR, MODIS LST, SMAP) — best-effort
-    satellite_extras = {}
-    try:
-        satellite_extras = await asyncio.wait_for(sat_extras_task, timeout=10.0)
-        if satellite_extras:
-            log.info(f"Satellite extras available: {list(satellite_extras.keys())}")
-    except (asyncio.TimeoutError, Exception):
-        log.info("Satellite extras skipped — proceeding without SAR/LST/SMAP")
+        # NDVI trajectory — best-effort, don't block
+        if ndvi_data:
+            try:
+                ndvi_trajectory = await asyncio.wait_for(
+                    fetch_ndvi_trajectory(req.latitude, req.longitude), timeout=5.0
+                )
+            except (asyncio.TimeoutError, Exception):
+                log.info("NDVI trajectory skipped — using basic NDVI only")
+
+    # 4-extra. Get additional satellite data (SAR, MODIS LST, SMAP) — only if not from cache
+    if not sat_from_cache and sat_extras_task:
+        try:
+            satellite_extras = await asyncio.wait_for(sat_extras_task, timeout=10.0)
+            if satellite_extras:
+                log.info(f"Satellite extras (live EE): {list(satellite_extras.keys())}")
+        except (asyncio.TimeoutError, Exception):
+            log.info("Satellite extras skipped — proceeding without SAR/LST/SMAP")
 
     # 4a. Calculate net profits with spoilage
     mandis = calculate_net_profits(mandis, crop=crop)
