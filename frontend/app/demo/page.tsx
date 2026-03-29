@@ -126,9 +126,14 @@ export default function DemoPage() {
     let lat = geo.latitude;
     let lon = geo.longitude;
     if (!lat || !lon) {
-      await new Promise(r => setTimeout(r, 2000));
-      lat = geo.latitude || 30.9045; // Fallback: Solan
-      lon = geo.longitude || 77.0967;
+      await new Promise(r => setTimeout(r, 3000));
+      lat = geo.latitude;
+      lon = geo.longitude;
+    }
+    if (!lat || !lon) {
+      setError("GPS location required. Please allow location access and try again.");
+      setStep("ready");
+      return;
     }
 
     // 2. Fetch everything

@@ -12,56 +12,30 @@ import {
   ReferenceLine,
 } from "recharts";
 
-const demoData = [
-  {
-    name: "Shimla",
-    netProfit: 2040,
-    price: 2400,
-    transport: 200,
-    commission: 160,
-    distance: 45,
-  },
-  {
-    name: "Chandigarh",
-    netProfit: 1850,
-    price: 2200,
-    transport: 180,
-    commission: 170,
-    distance: 120,
-  },
-  {
-    name: "Solan",
-    netProfit: 1560,
-    price: 1800,
-    transport: 80,
-    commission: 160,
-    distance: 12,
-  },
-  {
-    name: "Karnal",
-    netProfit: 1480,
-    price: 2000,
-    transport: 350,
-    commission: 170,
-    distance: 200,
-  },
-  {
-    name: "Ambala",
-    netProfit: 1650,
-    price: 2100,
-    transport: 280,
-    commission: 170,
-    distance: 150,
-  },
-];
-
 interface MandiComparisonProps {
-  data?: typeof demoData;
+  data?: Array<{
+    name: string;
+    netProfit: number;
+    price: number;
+    transport: number;
+    commission: number;
+    distance: number;
+  }>;
 }
 
 export default function MandiComparison({
-  data = demoData,
+  data,
 }: MandiComparisonProps) {
+  if (!data || data.length === 0) {
+    return (
+      <div className="glass-card p-4 sm:p-6">
+        <h3 className="text-sm font-semibold text-white/90">Mandi Net Profit Comparison</h3>
+        <div className="flex h-56 items-center justify-center text-sm text-white/30">
+          No mandi data available yet
+        </div>
+      </div>
+    );
+  }
   const sorted = [...data].sort((a, b) => b.netProfit - a.netProfit);
   const bestMandi = sorted[0]?.name;
 

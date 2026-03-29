@@ -13,26 +13,22 @@ import {
   ComposedChart,
 } from "recharts";
 
-const demoData = [
-  { date: "Jan 1", ndvi: 0.25, stage: "Seedling" },
-  { date: "Jan 15", ndvi: 0.32 },
-  { date: "Feb 1", ndvi: 0.41 },
-  { date: "Feb 15", ndvi: 0.55, stage: "Vegetative" },
-  { date: "Mar 1", ndvi: 0.63 },
-  { date: "Mar 15", ndvi: 0.71 },
-  { date: "Apr 1", ndvi: 0.76, stage: "Flowering" },
-  { date: "Apr 15", ndvi: 0.74 },
-  { date: "May 1", ndvi: 0.72 },
-  { date: "May 15", ndvi: 0.68, stage: "Fruiting" },
-  { date: "Jun 1", ndvi: 0.65 },
-  { date: "Jun 15", ndvi: 0.58, stage: "Harvest" },
-];
-
 interface NDVIChartProps {
-  data?: typeof demoData;
+  data?: Array<{ date: string; ndvi: number; stage?: string }>;
 }
 
-export default function NDVIChart({ data = demoData }: NDVIChartProps) {
+export default function NDVIChart({ data }: NDVIChartProps) {
+  if (!data || data.length === 0) {
+    return (
+      <div className="glass-card p-4 sm:p-6">
+        <h3 className="text-sm font-semibold text-white/90">NDVI Trend</h3>
+        <div className="flex h-56 items-center justify-center text-sm text-white/30">
+          No satellite data available yet
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="glass-card p-4 sm:p-6">
       <div className="mb-4 flex items-center justify-between">

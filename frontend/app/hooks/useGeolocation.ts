@@ -51,21 +51,24 @@ export default function useGeolocation() {
       const res = await fetch("https://ipapi.co/json/", { signal: AbortSignal.timeout(5000) });
       if (!res.ok) throw new Error("IP lookup failed");
       const data = await res.json();
-      setState({
-        latitude: data.latitude ?? 28.6139,
-        longitude: data.longitude ?? 77.209,
-        accuracy: 50000, // IP-based, ~50km accuracy
-        loading: false,
-        error: null,
-      });
+      if (data.latitude && data.longitude) {
+        setState({
+          latitude: data.latitude,
+          longitude: data.longitude,
+          accuracy: 50000, // IP-based, ~50km accuracy
+          loading: false,
+          error: null,
+        });
+      } else {
+        throw new Error("IP lookup returned no coordinates");
+      }
     } catch {
-      // Absolute fallback: center of India
       setState({
-        latitude: 22.9734,
-        longitude: 78.6569,
-        accuracy: 500000,
+        latitude: null,
+        longitude: null,
+        accuracy: null,
         loading: false,
-        error: "Could not determine location. Using default.",
+        error: "Could not determine location. Please allow GPS access.",
       });
     }
   }

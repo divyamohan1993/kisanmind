@@ -85,7 +85,7 @@ class MandiRanking(BaseModel):
     commission: float  # ₹ per quintal
     spoilage_loss: float  # ₹ per quintal
     net_profit: float  # ₹ per quintal
-    data_source: str  # e.g. "api" or "demo"
+    data_source: str  # e.g. "api"
     arrival_date: str
 
 
@@ -211,7 +211,7 @@ def rank_mandis(
     commission_rate:
         Fraction charged as market commission (default 4 %).
     data_source:
-        "api" or "demo" — forwarded into the ranking for transparency.
+        "api" — forwarded into the ranking for transparency.
 
     Returns
     -------

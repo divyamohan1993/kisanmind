@@ -19,61 +19,6 @@ export interface ForecastDay {
   alert?: string;
 }
 
-const demoForecast: ForecastDay[] = [
-  {
-    day: "Today",
-    date: "Mar 28",
-    icon: "sun",
-    tempHigh: 28,
-    tempLow: 14,
-    humidity: 45,
-    rainProb: 5,
-    windSpeed: 8,
-  },
-  {
-    day: "Sat",
-    date: "Mar 29",
-    icon: "cloud",
-    tempHigh: 26,
-    tempLow: 15,
-    humidity: 55,
-    rainProb: 20,
-    windSpeed: 12,
-  },
-  {
-    day: "Sun",
-    date: "Mar 30",
-    icon: "rain",
-    tempHigh: 22,
-    tempLow: 16,
-    humidity: 78,
-    rainProb: 85,
-    windSpeed: 18,
-    alert: "Heavy rain -- harvest tomorrow!",
-  },
-  {
-    day: "Mon",
-    date: "Mar 31",
-    icon: "rain",
-    tempHigh: 20,
-    tempLow: 15,
-    humidity: 82,
-    rainProb: 70,
-    windSpeed: 15,
-    alert: "Do not spray pesticides",
-  },
-  {
-    day: "Tue",
-    date: "Apr 1",
-    icon: "cloud",
-    tempHigh: 24,
-    tempLow: 14,
-    humidity: 60,
-    rainProb: 25,
-    windSpeed: 10,
-  },
-];
-
 const iconMap = {
   sun: Sun,
   cloud: Cloud,
@@ -87,8 +32,16 @@ interface WeatherTimelineProps {
 }
 
 export default function WeatherTimeline({
-  forecast = demoForecast,
+  forecast,
 }: WeatherTimelineProps) {
+  if (!forecast || forecast.length === 0) {
+    return (
+      <div className="flex h-48 items-center justify-center text-sm text-white/30">
+        No forecast data available yet
+      </div>
+    );
+  }
+
   return (
     <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin">
       {forecast.map((day, i) => {

@@ -10,11 +10,23 @@ interface SatelliteMapProps {
 }
 
 export default function SatelliteMap({
-  location = "Solan, Himachal Pradesh",
-  ndvi = 0.72,
-  status = "healthy",
+  location,
+  ndvi,
+  status,
   imageUrl,
 }: SatelliteMapProps) {
+  if (!location && !imageUrl && ndvi == null) {
+    return (
+      <div className="relative overflow-hidden rounded-2xl border border-white/5">
+        <div className="flex h-64 sm:h-80 lg:h-96 items-center justify-center bg-kisan-dark-2 text-sm text-white/30">
+          <div className="text-center">
+            <Satellite size={32} className="mx-auto mb-2 text-white/20" />
+            <p>Waiting for satellite data...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
   const statusColor =
     status === "healthy"
       ? "text-healthy"
@@ -45,64 +57,11 @@ export default function SatelliteMap({
         {/* Scan line effect */}
         <div className="scan-line" />
 
-        {/* Field grid overlay (only when no real image) */}
+        {/* Loading placeholder when no real satellite image */}
         {!imageUrl && (
-          <>
-            <svg
-              className="absolute inset-0 h-full w-full opacity-20"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <defs>
-                <pattern
-                  id="field-grid"
-                  width="60"
-                  height="60"
-                  patternUnits="userSpaceOnUse"
-                >
-                  <path
-                    d="M 60 0 L 0 0 0 60"
-                    fill="none"
-                    stroke="rgba(34,197,94,0.3)"
-                    strokeWidth="0.5"
-                  />
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#field-grid)" />
-            </svg>
-
-            {/* Field parcel outlines */}
-            <svg
-              className="absolute inset-0 h-full w-full"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 400 300"
-              preserveAspectRatio="none"
-            >
-              <polygon
-                points="50,80 180,60 200,160 70,180"
-                fill="rgba(34,197,94,0.15)"
-                stroke="rgba(34,197,94,0.4)"
-                strokeWidth="1"
-              />
-              <polygon
-                points="200,50 340,70 350,180 210,160"
-                fill="rgba(34,197,94,0.1)"
-                stroke="rgba(34,197,94,0.3)"
-                strokeWidth="1"
-              />
-              <polygon
-                points="60,190 200,170 220,260 80,270"
-                fill="rgba(234,179,8,0.12)"
-                stroke="rgba(234,179,8,0.35)"
-                strokeWidth="1"
-              />
-              <polygon
-                points="230,170 360,190 370,270 240,260"
-                fill="rgba(239,68,68,0.08)"
-                stroke="rgba(239,68,68,0.25)"
-                strokeWidth="1"
-              />
-            </svg>
-          </>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <p className="text-xs text-white/20">Satellite image loading...</p>
+          </div>
         )}
 
         {/* Corner coordinates display */}
@@ -130,7 +89,7 @@ export default function SatelliteMap({
               NDVI Index
             </div>
             <div className={`text-3xl font-bold tabular-nums ${statusColor}`}>
-              {ndvi.toFixed(2)}
+              {ndvi != null ? ndvi.toFixed(2) : "--"}
             </div>
             <div className={`text-xs font-medium capitalize ${statusColor}`}>
               {status}

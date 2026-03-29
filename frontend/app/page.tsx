@@ -67,9 +67,9 @@ function mapApiToState(api: ApiResponse) {
   // Build satellite data — prefer structured satellite response, fall back to parsing advisory text
   const satNdvi = api.satellite?.ndvi;
   const ndviFromText = api.advisory?.match(/NDVI[:\s]*([0-9.]+)/i);
-  const ndviValue = satNdvi != null ? satNdvi : ndviFromText ? parseFloat(ndviFromText[1]) : 0.65;
-  const ndviStatus: "healthy" | "moderate" | "stressed" =
-    ndviValue >= 0.6 ? "healthy" : ndviValue >= 0.3 ? "moderate" : "stressed";
+  const ndviValue = satNdvi != null ? satNdvi : ndviFromText ? parseFloat(ndviFromText[1]) : undefined;
+  const ndviStatus: "healthy" | "moderate" | "stressed" | undefined =
+    ndviValue != null ? (ndviValue >= 0.6 ? "healthy" : ndviValue >= 0.3 ? "moderate" : "stressed") : undefined;
   const trueColorUrl = api.satellite?.true_color_url;
   const ndviColorUrl = api.satellite?.ndvi_color_url;
 
@@ -186,11 +186,13 @@ export default function Dashboard() {
       }, 2500);
       try {
         const body: Record<string, unknown> = {
-          location: searchLocation || "Solan",
           crop: searchCrop || "Tomato",
           intent: text || "full advisory",
           language: language || "hi-IN",
         };
+        if (searchLocation) {
+          body.location = searchLocation;
+        }
         if (geo.latitude && geo.longitude) {
           body.latitude = geo.latitude;
           body.longitude = geo.longitude;
@@ -204,8 +206,8 @@ export default function Dashboard() {
         });
 
         const ndviBody = {
-          latitude: (body.latitude as number) ?? 30.9,
-          longitude: (body.longitude as number) ?? 77.1,
+          latitude: body.latitude as number | undefined,
+          longitude: body.longitude as number | undefined,
         };
         const ndviPromise = fetch(`${API_BASE}/api/ndvi`, {
           method: "POST",
@@ -516,11 +518,7 @@ export default function Dashboard() {
       {/* Charts Grid */}
       <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
         <NDVIChart />
-        {data?.mandiChartData && data.mandiChartData.length > 0 ? (
-          <MandiComparison data={data.mandiChartData} />
-        ) : (
-          <MandiComparison />
-        )}
+        <MandiComparison data={data?.mandiChartData} />
       </div>
 
       {/* Weather Timeline */}
@@ -534,10 +532,8 @@ export default function Dashboard() {
               <div key={i} className="min-w-[150px] h-48 rounded-xl shimmer" />
             ))}
           </div>
-        ) : data?.forecastDays && data.forecastDays.length > 0 ? (
-          <WeatherTimeline forecast={data.forecastDays} />
         ) : (
-          <WeatherTimeline />
+          <WeatherTimeline forecast={data?.forecastDays} />
         )}
       </div>
 

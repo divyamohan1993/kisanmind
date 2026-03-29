@@ -151,63 +151,21 @@ def classify_intent(user_message: str) -> str:
 
 async def _call_sat_drishti(lat: float, lon: float, crop: str) -> dict:
     """Invoke SatDrishti for crop health analysis."""
-    try:
-        from agents.sat_drishti import analyze  # type: ignore[import]
-        return await analyze(lat, lon, crop)
-    except ImportError:
-        # Fallback demo response
-        return {
-            "agent": "SatDrishti",
-            "ndvi_mean": 0.62,
-            "evi_mean": 0.45,
-            "ndwi_mean": 0.18,
-            "health_status": "moderate_stress",
-            "trend": "declining_slightly",
-            "recommendation": "NDVI is below seasonal benchmark. Consider soil moisture check.",
-            "data_source": f"Sentinel-2 composite (demo) for ({lat}, {lon})",
-        }
+    from agents.sat_drishti import analyze  # type: ignore[import]
+    return await analyze(lat, lon, crop)
 
 
 async def _call_mandi_mitra(lat: float, lon: float, crop: str,
                             quantity_qtl: float) -> dict:
     """Invoke MandiMitra for market intelligence."""
-    try:
-        from agents.mandi_mitra import find_best_mandi  # type: ignore[import]
-        return await find_best_mandi(lat, lon, crop, quantity_qtl)
-    except ImportError:
-        return {
-            "agent": "MandiMitra",
-            "best_mandi": "Solan Mandi",
-            "modal_price_per_qtl": 2850,
-            "transport_cost": 420,
-            "commission": 114,
-            "estimated_net_profit": 2316,
-            "alternatives": [
-                {"mandi": "Shimla Mandi", "net_profit": 2180},
-                {"mandi": "Chandigarh Mandi", "net_profit": 2050},
-            ],
-            "data_source": "AgMarkNet prices (demo data)",
-        }
+    from agents.mandi_mitra import find_best_mandi  # type: ignore[import]
+    return await find_best_mandi(lat, lon, crop, quantity_qtl)
 
 
 async def _call_mausam_guru(lat: float, lon: float) -> dict:
     """Invoke MausamGuru for weather advisory."""
-    try:
-        from agents.mausam_guru import get_advisory  # type: ignore[import]
-        return await get_advisory(lat, lon)
-    except ImportError:
-        return {
-            "agent": "MausamGuru",
-            "forecast_summary": "Light rain expected in 48 hours. Temperature dropping to 8C at night.",
-            "alerts": ["frost_risk_moderate"],
-            "action_items": [
-                "Cover nursery beds with polythene mulch tonight",
-                "Delay pesticide spray until rain passes",
-                "Irrigate before frost window to retain soil warmth",
-            ],
-            "spray_window": "Clear window: Day 4-5 (10 AM - 2 PM)",
-            "data_source": "IMD forecast (demo data)",
-        }
+    from agents.mausam_guru import get_advisory  # type: ignore[import]
+    return await get_advisory(lat, lon)
 
 
 # ---------------------------------------------------------------------------

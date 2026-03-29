@@ -1,7 +1,7 @@
 """AgMarkNet API client for fetching live mandi (wholesale market) prices.
 
 Uses the data.gov.in open API to query commodity prices across Indian mandis.
-Falls back to demo data when the API is unavailable or credentials are missing.
+Returns empty results when the API is unavailable or credentials are missing.
 """
 
 from __future__ import annotations
@@ -46,84 +46,8 @@ class AgMarkNetResponse(BaseModel):
     """Wrapper around the list of mandi prices returned to callers."""
 
     records: list[MandiPrice]
-    source: str  # "api" or "demo"
+    source: str  # "api" or "error"
     fetched_at: str  # ISO timestamp
-
-
-# ---------------------------------------------------------------------------
-# Demo / fallback data — Himachal Pradesh tomato prices
-# ---------------------------------------------------------------------------
-
-_DEMO_RECORDS: list[dict] = [
-    {
-        "state": "Himachal Pradesh",
-        "district": "Solan",
-        "market": "Solan",
-        "commodity": "Tomato",
-        "variety": "Hybrid",
-        "arrival_date": "2026-03-27",
-        "min_price": 1800.0,
-        "max_price": 2400.0,
-        "modal_price": 2100.0,
-    },
-    {
-        "state": "Himachal Pradesh",
-        "district": "Shimla",
-        "market": "Shimla",
-        "commodity": "Tomato",
-        "variety": "Hybrid",
-        "arrival_date": "2026-03-27",
-        "min_price": 2000.0,
-        "max_price": 2800.0,
-        "modal_price": 2400.0,
-    },
-    {
-        "state": "Himachal Pradesh",
-        "district": "Kullu",
-        "market": "Kullu",
-        "commodity": "Tomato",
-        "variety": "Local",
-        "arrival_date": "2026-03-27",
-        "min_price": 1600.0,
-        "max_price": 2200.0,
-        "modal_price": 1900.0,
-    },
-    {
-        "state": "Himachal Pradesh",
-        "district": "Mandi",
-        "market": "Mandi",
-        "commodity": "Tomato",
-        "variety": "Hybrid",
-        "arrival_date": "2026-03-27",
-        "min_price": 1700.0,
-        "max_price": 2500.0,
-        "modal_price": 2200.0,
-    },
-    {
-        "state": "Himachal Pradesh",
-        "district": "Kangra",
-        "market": "Palampur",
-        "commodity": "Tomato",
-        "variety": "Local",
-        "arrival_date": "2026-03-27",
-        "min_price": 1500.0,
-        "max_price": 2100.0,
-        "modal_price": 1800.0,
-    },
-]
-
-
-def _get_demo_data(commodity: Optional[str] = None) -> AgMarkNetResponse:
-    """Return hard-coded demo data, optionally filtered by commodity."""
-    records = _DEMO_RECORDS
-    if commodity:
-        commodity_lower = commodity.strip().lower()
-        records = [r for r in records if r["commodity"].lower() == commodity_lower]
-    return AgMarkNetResponse(
-        records=[MandiPrice(**r) for r in records],
-        source="demo",
-        fetched_at=datetime.utcnow().isoformat(),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -151,15 +75,17 @@ def fetch_mandi_prices(
 
     Returns
     -------
-    AgMarkNetResponse with records sourced from the API, or demo data on
+    AgMarkNetResponse with records sourced from the API, or empty on
     failure.
     """
     api_key = os.getenv("AGMARKNET_API_KEY", "")
     if not api_key:
-        logger.warning(
-            "AGMARKNET_API_KEY not set — returning demo data for %s", commodity
+        logger.error("AGMARKNET_API_KEY not set — cannot fetch prices for %s", commodity)
+        return AgMarkNetResponse(
+            records=[],
+            source="error",
+            fetched_at=datetime.utcnow().isoformat(),
         )
-        return _get_demo_data(commodity)
 
     params: dict = {
         "api-key": api_key,
@@ -177,17 +103,25 @@ def fetch_mandi_prices(
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as exc:
-        logger.error("AgMarkNet API request failed: %s — falling back to demo data", exc)
-        return _get_demo_data(commodity)
+        logger.error("AgMarkNet API request failed: %s", exc)
+        return AgMarkNetResponse(
+            records=[],
+            source="error",
+            fetched_at=datetime.utcnow().isoformat(),
+        )
 
     raw_records = data.get("records", [])
     if not raw_records:
         logger.info(
-            "AgMarkNet returned 0 records for commodity=%s, state=%s — using demo data",
+            "AgMarkNet returned 0 records for commodity=%s, state=%s",
             commodity,
             state,
         )
-        return _get_demo_data(commodity)
+        return AgMarkNetResponse(
+            records=[],
+            source="api",
+            fetched_at=datetime.utcnow().isoformat(),
+        )
 
     records: list[MandiPrice] = []
     for rec in raw_records:
@@ -209,7 +143,11 @@ def fetch_mandi_prices(
             logger.debug("Skipping malformed AgMarkNet record: %s", exc)
 
     if not records:
-        return _get_demo_data(commodity)
+        return AgMarkNetResponse(
+            records=[],
+            source="api",
+            fetched_at=datetime.utcnow().isoformat(),
+        )
 
     return AgMarkNetResponse(
         records=records,

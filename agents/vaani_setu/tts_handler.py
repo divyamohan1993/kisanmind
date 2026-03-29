@@ -169,36 +169,6 @@ def _synthesise_cloud(
 
 
 # ---------------------------------------------------------------------------
-# Mock / demo fallback
-# ---------------------------------------------------------------------------
-
-
-def _synthesise_mock(
-    text: str,
-    language_code: str,
-    output_format: str,
-) -> TTSResult:
-    """
-    Return an empty audio payload when cloud credentials are unavailable.
-
-    The transcript text is logged so developers can verify the output.
-    """
-    logger.info(
-        "Using mock TTS (no cloud credentials). lang=%s, text_len=%d",
-        language_code,
-        len(text),
-    )
-    content_type = "audio/mpeg" if output_format == "mp3" else "audio/wav"
-    return TTSResult(
-        audio_bytes=b"",
-        content_type=content_type,
-        language_code=language_code,
-        voice_name=VOICE_MAP.get(language_code, "mock"),
-        is_mock=True,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -247,7 +217,5 @@ def synthesise_speech(
     try:
         return _synthesise_cloud(synth_text, language_code, output_format, use_ssml)
     except Exception as exc:
-        logger.warning(
-            "Cloud TTS unavailable (%s), falling back to mock", exc
-        )
-        return _synthesise_mock(text, language_code, output_format)
+        logger.error("Cloud TTS unavailable: %s", exc)
+        raise RuntimeError(f"Text-to-speech service unavailable: {exc}") from exc

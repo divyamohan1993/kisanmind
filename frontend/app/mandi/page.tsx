@@ -39,16 +39,16 @@ export default function MandiPage() {
     setIsLoading(true);
     setError(null);
     try {
+      if (!geo.latitude || !geo.longitude) {
+        throw new Error("Location not available. Please allow GPS access.");
+      }
       const body: Record<string, unknown> = {
-        location: "Solan",
         crop,
         intent: "mandi prices",
         language: "hi-IN",
+        latitude: geo.latitude,
+        longitude: geo.longitude,
       };
-      if (geo.latitude && geo.longitude) {
-        body.latitude = geo.latitude;
-        body.longitude = geo.longitude;
-      }
 
       const res = await fetch(`${API_BASE}/api/advisory`, {
         method: "POST",

@@ -2,7 +2,7 @@
 Speech-to-Text handler for VaaniSetu.
 
 Uses Google Cloud Speech-to-Text V2 configured for Indian-language
-telephony audio.  Falls back to a mock/demo transcript when cloud
+telephony audio.  Raises an error when cloud
 credentials are unavailable (local development).
 """
 
@@ -147,28 +147,6 @@ def _recognise_cloud(audio_bytes: bytes) -> STTResult:
 
 
 # ---------------------------------------------------------------------------
-# Mock / demo fallback
-# ---------------------------------------------------------------------------
-
-
-def _recognise_mock(audio_bytes: bytes) -> STTResult:
-    """
-    Return a demo transcript when cloud credentials are unavailable.
-
-    Useful for local development and testing without GCP access.
-    """
-    logger.info(
-        "Using mock STT (no cloud credentials). Audio size: %d bytes",
-        len(audio_bytes),
-    )
-    return STTResult(
-        transcript="Mere tamatar ki fasal mein keede lag rahe hain, kya karun?",
-        language_code="hi-IN",
-        confidence=0.92,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -177,8 +155,8 @@ def recognise_speech(audio_bytes: bytes) -> STTResult:
     """
     Transcribe *audio_bytes* to text with language detection.
 
-    Automatically uses the Cloud Speech V2 API when credentials are
-    available; falls back to a mock transcript otherwise.
+    Uses the Cloud Speech V2 API. Raises RuntimeError if the service
+    is unavailable.
 
     Parameters
     ----------
@@ -200,7 +178,5 @@ def recognise_speech(audio_bytes: bytes) -> STTResult:
     try:
         return _recognise_cloud(audio_bytes)
     except Exception as exc:
-        logger.warning(
-            "Cloud STT unavailable (%s), falling back to mock", exc
-        )
-        return _recognise_mock(audio_bytes)
+        logger.error("Cloud STT unavailable: %s", exc)
+        raise RuntimeError(f"Speech-to-text service unavailable: {exc}") from exc

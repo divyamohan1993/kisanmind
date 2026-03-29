@@ -160,7 +160,7 @@ def get_weather_advisory(
     source_label = (
         "Google Weather API (live data)"
         if forecast.source == "google_weather_api"
-        else "Simulated forecast data (demo mode — live API key not configured)"
+        else "Weather data unavailable — API key not configured"
     )
 
     disclaimer = (
