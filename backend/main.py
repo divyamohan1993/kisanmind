@@ -193,7 +193,10 @@ _ee_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ee")
 # ---------------------------------------------------------------------------
 # Local satellite cache (pre-computed, instant lookup)
 # ---------------------------------------------------------------------------
-from backend.satellite_cache import SatelliteCache
+try:
+    from backend.satellite_cache import SatelliteCache
+except ImportError:
+    from satellite_cache import SatelliteCache
 
 _sat_cache_dir = Path(__file__).resolve().parent.parent / "data" / "satellite_cache"
 _sat_cache = SatelliteCache(str(_sat_cache_dir))
