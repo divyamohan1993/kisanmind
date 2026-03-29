@@ -10,18 +10,18 @@ const SLIDES = [
       <div className="text-center text-white">
         <p className="text-sm uppercase tracking-[0.2em] text-green-400 mb-6">ET AI Hackathon 2026 · Problem #5</p>
         <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight mb-4">🌾 KisanMind</h1>
-        <p className="text-xl md:text-2xl font-light text-white/80 max-w-2xl mx-auto">
+        <p className="text-xl md:text-2xl font-light text-white/90 max-w-2xl mx-auto">
           One phone call. Four satellites. Personalized farming advice in 22 languages.
         </p>
         <div className="flex justify-center gap-8 mt-10 flex-wrap">
           {[["150M", "Farmers"], ["9", "Data Sources"], ["4", "Satellites"], ["112", "Crops"], ["22", "Languages"]].map(([n, l]) => (
             <div key={l} className="text-center">
               <div className="text-3xl font-bold text-green-400">{n}</div>
-              <div className="text-xs uppercase tracking-widest text-white/50">{l}</div>
+              <div className="text-xs uppercase tracking-widest text-white/70">{l}</div>
             </div>
           ))}
         </div>
-        <p className="mt-10 text-sm text-white/40">Divya Mohan · Kumkum Thakur</p>
+        <p className="mt-10 text-sm text-white/70">Divya Mohan · Kumkum Thakur</p>
       </div>
     ),
   },
@@ -46,7 +46,7 @@ const SLIDES = [
               <span className="text-red-500 text-xl font-bold mt-0.5">✗</span>
               <div>
                 <p className="font-bold text-[#1a365d] text-lg">{title}</p>
-                <p className="text-gray-600 text-sm">{desc}</p>
+                <p className="text-gray-800 text-sm">{desc}</p>
               </div>
             </div>
           ))}
@@ -64,7 +64,7 @@ const SLIDES = [
         <h2 className="text-3xl md:text-5xl font-extrabold tracking-tight mb-6">
           Satellite intelligence,<br />delivered by voice.
         </h2>
-        <p className="text-lg text-white/70 mb-10 max-w-xl mx-auto">
+        <p className="text-lg text-white/90 mb-10 max-w-xl mx-auto">
           A farmer calls. Says their crop. Gets personalized advice from 4 satellites, 112 commodity prices, and 5-day weather — in their language. Under 30 seconds.
         </p>
         <div className="grid grid-cols-3 gap-6 text-left">
@@ -76,7 +76,7 @@ const SLIDES = [
             <div key={title} className="bg-white/5 rounded-xl p-5 border border-white/10">
               <div className="text-2xl mb-2">{icon}</div>
               <p className="font-bold text-white text-sm mb-1">{title}</p>
-              <p className="text-white/50 text-xs leading-relaxed">{desc}</p>
+              <p className="text-white/70 text-xs leading-relaxed">{desc}</p>
             </div>
           ))}
         </div>
@@ -93,7 +93,7 @@ const SLIDES = [
         <h2 className="text-3xl md:text-5xl font-extrabold text-[#1a365d] tracking-tight mb-8">
           Cross-validation.<br />Not just data relay.
         </h2>
-        <p className="text-gray-600 mb-6">We don't just show satellite data. We compare it across sources to catch contradictions before the farmer gets wrong advice.</p>
+        <p className="text-gray-800 mb-6">We don't just show satellite data. We compare it across sources to catch contradictions before the farmer gets wrong advice.</p>
         <div className="space-y-3">
           {[
             ["NDVI declining + rain adequate", "Sentinel-2 vs Weather", "→ Pest/disease, NOT drought. Refer KVK."],
@@ -106,7 +106,7 @@ const SLIDES = [
             <div key={signal} className="flex items-center gap-3 bg-gray-50 rounded-lg p-3 border border-gray-100">
               <div className="flex-1">
                 <p className="font-semibold text-[#1a365d] text-sm">{signal}</p>
-                <p className="text-gray-400 text-xs">{src}</p>
+                <p className="text-gray-800 text-xs">{src}</p>
               </div>
               <p className="font-bold text-[#138808] text-sm text-right">{action}</p>
             </div>
@@ -116,36 +116,77 @@ const SLIDES = [
     ),
   },
 
-  // 5. BUSINESS MODEL
+  // 5. BUSINESS MODEL — with explicit assumptions and back-of-envelope math
   {
     bg: "bg-gradient-to-br from-[#0f1f3d] to-[#1a365d]",
     content: (
       <div className="text-white max-w-3xl mx-auto">
-        <p className="text-sm uppercase tracking-[0.15em] text-green-400 font-bold mb-2">Business Model</p>
-        <h2 className="text-3xl md:text-5xl font-extrabold tracking-tight mb-8">
-          +30% income.<br />₹34,000/year per farmer.
+        <p className="text-sm uppercase tracking-[0.15em] text-green-400 font-bold mb-2">Impact · Back-of-Envelope Math</p>
+        <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight mb-6">
+          +30% income per farmer. Here's the math.
         </h2>
-        <div className="grid grid-cols-2 gap-4 mb-8">
+
+        <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-6 text-xs text-white/80 leading-relaxed">
+          <p className="font-bold text-green-400 uppercase tracking-wider text-[0.65rem] mb-2">Assumptions</p>
+          <p>Avg smallholder: 2 hectares · 30 quintals/season · 2 seasons/year · Grows tomato or wheat · Baseline income ₹1,10,000/year · Nearest mandi 15km, best mandi 60km · Transport ₹3.5/km/quintal · Commission 4% · Perishable spoilage 0.5%/hr</p>
+        </div>
+
+        <div className="space-y-3 mb-6">
           {[
-            ["+₹12K", "/season", "Mandi arbitrage", "Best mandi by net profit, not just price"],
-            ["+₹10K", "/season", "Spoilage prevention", "Weather-timed harvest + spray timing"],
-            ["+₹2K", "/season", "Input savings", "SAR + SMAP guided irrigation"],
-            ["~4 hrs", "/query", "Time saved", "One call vs mandi + KVK + weather"],
-          ].map(([num, unit, title, desc]) => (
-            <div key={title} className="bg-white/5 rounded-xl p-4 border border-white/10">
-              <div className="flex items-baseline gap-1">
-                <span className="text-2xl font-bold text-green-400">{num}</span>
-                <span className="text-sm text-green-400/60">{unit}</span>
+            {
+              lever: "Revenue recovered",
+              label: "Mandi price arbitrage",
+              math: "Best mandi ₹2,400/q vs local ₹1,800/q. Net after transport (60km × ₹3.5 = ₹210) + commission (₹96) + spoilage (₹36) = ₹2,058 net vs ₹1,728 local. Δ₹330/q × 30q × 2 seasons",
+              value: "+₹19,800/yr",
+            },
+            {
+              lever: "Cost reduced",
+              label: "Spoilage prevention",
+              math: "Weather-timed harvest avoids 5% post-harvest loss. 30q × ₹1,800/q × 5% = ₹2,700/season × 2",
+              value: "+₹5,400/yr",
+            },
+            {
+              lever: "Cost reduced",
+              label: "Irrigation savings",
+              math: "SAR + SMAP prevents 2 unnecessary irrigations/season. Borwell: ₹800/irrigation × 2 × 2 seasons",
+              value: "+₹3,200/yr",
+            },
+            {
+              lever: "Time saved",
+              label: "One call vs 3 trips",
+              math: "Mandi visit (2hr) + KVK trip (1.5hr) + weather check (0.5hr) = 4hr. At ₹200/day farm labor, 4hr = ₹100. ~6 queries/year",
+              value: "+₹600/yr",
+            },
+          ].map(({lever, label, math, value}) => (
+            <div key={label} className="bg-white/5 rounded-lg p-3 border border-white/10">
+              <div className="flex justify-between items-start gap-4">
+                <div className="flex-1">
+                  <span className="text-[0.6rem] uppercase tracking-wider text-green-400 font-bold">{lever}</span>
+                  <p className="font-semibold text-white text-sm">{label}</p>
+                  <p className="text-white/70 text-xs mt-0.5 leading-relaxed">{math}</p>
+                </div>
+                <span className="text-green-400 font-bold text-lg whitespace-nowrap">{value}</span>
               </div>
-              <p className="font-semibold text-white text-sm mt-1">{title}</p>
-              <p className="text-white/40 text-xs">{desc}</p>
             </div>
           ))}
         </div>
-        <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-5 text-center">
-          <p className="text-green-400 text-sm font-semibold">Year 1 · 100K farmers</p>
-          <p className="text-4xl font-extrabold text-white mt-1">₹3.4 billion</p>
-          <p className="text-white/40 text-xs mt-1">total value created</p>
+
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4">
+            <p className="text-green-400 text-xs font-semibold">Per Farmer</p>
+            <p className="text-2xl font-extrabold text-white">₹29,000</p>
+            <p className="text-white/60 text-xs">/year (+26%)</p>
+          </div>
+          <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4">
+            <p className="text-green-400 text-xs font-semibold">Year 1 · 100K</p>
+            <p className="text-2xl font-extrabold text-white">₹2.9B</p>
+            <p className="text-white/60 text-xs">value created</p>
+          </div>
+          <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4">
+            <p className="text-green-400 text-xs font-semibold">150M farmers</p>
+            <p className="text-2xl font-extrabold text-white">₹4.4T</p>
+            <p className="text-white/60 text-xs">TAM ceiling</p>
+          </div>
         </div>
       </div>
     ),
@@ -173,7 +214,7 @@ const SLIDES = [
               <div className={`${color} text-white w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0`}>{num}</div>
               <div>
                 <p className="font-bold text-[#1a365d]">{title}</p>
-                <p className="text-gray-500 text-sm">{desc}</p>
+                <p className="text-gray-700 text-sm">{desc}</p>
               </div>
             </div>
           ))}
@@ -204,7 +245,7 @@ const SLIDES = [
           ].map(([label, tech]) => (
             <div key={label} className="bg-white/5 rounded-lg p-4 border border-white/10">
               <p className="font-bold text-green-400 text-xs uppercase tracking-wider mb-1">{label}</p>
-              <p className="text-white/70 text-xs leading-relaxed">{tech}</p>
+              <p className="text-white/90 text-xs leading-relaxed">{tech}</p>
             </div>
           ))}
         </div>
@@ -232,7 +273,7 @@ const SLIDES = [
           ].map(([title, desc]) => (
             <div key={title} className="bg-gray-50 rounded-xl p-4 border border-gray-100">
               <p className="font-bold text-[#1a365d] text-sm mb-1">{title}</p>
-              <p className="text-gray-500 text-xs leading-relaxed">{desc}</p>
+              <p className="text-gray-700 text-xs leading-relaxed">{desc}</p>
             </div>
           ))}
         </div>
@@ -253,9 +294,9 @@ const SLIDES = [
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/10">
-                <th className="text-left py-3 px-3 text-white/40 text-xs uppercase tracking-wider">Feature</th>
+                <th className="text-left py-3 px-3 text-white/70 text-xs uppercase tracking-wider">Feature</th>
                 <th className="text-center py-3 px-3 text-green-400 text-xs uppercase tracking-wider">KisanMind</th>
-                <th className="text-center py-3 px-3 text-white/30 text-xs uppercase tracking-wider">Others</th>
+                <th className="text-center py-3 px-3 text-white/60 text-xs uppercase tracking-wider">Others</th>
               </tr>
             </thead>
             <tbody>
@@ -270,9 +311,9 @@ const SLIDES = [
                 ["Data transparency", "Confidence + age + source", "Black box"],
               ].map(([feat, us, them]) => (
                 <tr key={feat} className="border-b border-white/5">
-                  <td className="py-2.5 px-3 text-white/60">{feat}</td>
+                  <td className="py-2.5 px-3 text-white/80">{feat}</td>
                   <td className="py-2.5 px-3 text-center font-semibold text-green-400">{us}</td>
-                  <td className="py-2.5 px-3 text-center text-white/20">{them}</td>
+                  <td className="py-2.5 px-3 text-center text-white/60">{them}</td>
                 </tr>
               ))}
             </tbody>
@@ -290,7 +331,7 @@ const SLIDES = [
         <h2 className="text-4xl md:text-6xl font-extrabold tracking-tight mb-6">
           Try it now.
         </h2>
-        <p className="text-lg text-white/60 mb-10">
+        <p className="text-lg text-white/80 mb-10">
           Live at kisanmind.dmj.one. Call and speak in Hindi. See satellite data turn into farming advice in 30 seconds.
         </p>
         <div className="flex justify-center gap-4 flex-wrap">
@@ -304,13 +345,13 @@ const SLIDES = [
           </a>
         </div>
         <div className="mt-12 pt-8 border-t border-white/10">
-          <p className="text-white/30 text-sm">
+          <p className="text-white/60 text-sm">
             🌾 KisanMind · ET AI Hackathon 2026 · Problem #5: Domain-Specialized AI Agents
           </p>
-          <p className="text-white/20 text-xs mt-2">
+          <p className="text-white/60 text-xs mt-2">
             100% real data · 4 satellites · 112 crops · 22 languages · Zero hallucination
           </p>
-          <p className="text-white/20 text-xs mt-1">Divya Mohan · Kumkum Thakur</p>
+          <p className="text-white/60 text-xs mt-1">Divya Mohan · Kumkum Thakur</p>
         </div>
       </div>
     ),
@@ -354,32 +395,32 @@ export default function PitchPage() {
     <div className={`min-h-screen flex flex-col ${current.bg} transition-colors duration-500`}>
       {/* Progress bar */}
       <div className="fixed top-0 left-0 right-0 h-1 z-50 bg-black/10">
-        <div className="h-full bg-[#138808] transition-all duration-300" style={{ width: `${((slide + 1) / total) * 100}%` }} />
+        <div className="h-full bg-[#138808] transition-all duration-300" role="progressbar" aria-valuenow={slide + 1} aria-valuemin={1} aria-valuemax={total} aria-label="Pitch progress" style={{ width: `${((slide + 1) / total) * 100}%` }} />
       </div>
 
       {/* Slide content */}
-      <div className="flex-1 flex items-center justify-center px-6 py-12 md:px-12" onClick={next}>
+      <div className="flex-1 flex items-center justify-center px-6 py-12 md:px-12" onClick={next} role="main" aria-label={`Slide ${slide + 1} of ${total}`}>
         <div className="w-full max-w-4xl">
           {current.content}
         </div>
       </div>
 
       {/* Navigation */}
-      <div className="fixed bottom-0 left-0 right-0 flex items-center justify-between px-6 py-4 z-50">
+      <nav className="fixed bottom-0 left-0 right-0 flex items-center justify-between px-6 py-4 z-50" aria-label="Slide navigation">
         <button onClick={(e) => { e.stopPropagation(); prev(); }} disabled={slide === 0}
-          className="w-10 h-10 rounded-full bg-black/10 hover:bg-black/20 text-white/70 disabled:opacity-20 flex items-center justify-center text-lg transition-colors"
+          className="w-11 h-11 rounded-full bg-black/10 hover:bg-black/20 text-white/90 disabled:opacity-20 flex items-center justify-center text-lg transition-colors"
           aria-label="Previous slide">
           ←
         </button>
-        <span className={`text-xs font-mono ${current.bg.includes("white") ? "text-gray-400" : "text-white/30"}`}>
+        <span className={`text-xs font-mono ${current.bg.includes("white") ? "text-gray-800" : "text-white/60"}`} aria-live="polite">
           {slide + 1} / {total}
         </span>
         <button onClick={(e) => { e.stopPropagation(); next(); }} disabled={slide === total - 1}
-          className="w-10 h-10 rounded-full bg-black/10 hover:bg-black/20 text-white/70 disabled:opacity-20 flex items-center justify-center text-lg transition-colors"
+          className="w-11 h-11 rounded-full bg-black/10 hover:bg-black/20 text-white/90 disabled:opacity-20 flex items-center justify-center text-lg transition-colors"
           aria-label="Next slide">
           →
         </button>
-      </div>
+      </nav>
     </div>
   );
 }
