@@ -3,7 +3,7 @@
   <img src="https://img.shields.io/badge/Problem_5-Domain_Specialized_AI_Agents-38bdf8?style=for-the-badge" alt="Problem 5" />
   <img src="https://img.shields.io/badge/Phase_II-Submission-f59e0b?style=for-the-badge" alt="Phase II" />
 </p>
-
+ 
 <h1 align="center">🌾 KisanMind (किसानमाइंड)</h1>
 <h3 align="center">Satellite-to-Voice Agricultural Intelligence for 150M Indian Farmers</h3>
 

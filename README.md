@@ -26,7 +26,7 @@
   <a href="https://kisanmind.dmj.one"><img src="https://img.shields.io/badge/Live_App-kisanmind.dmj.one-22c55e?style=for-the-badge&logo=phone&logoColor=white" alt="Live App" /></a>
   <a href="https://kisanmind.dmj.one/api/health"><img src="https://img.shields.io/badge/API_Health-Check-38bdf8?style=for-the-badge&logo=fastapi&logoColor=white" alt="API Health" /></a>
 </p>
-
+ 
 ---
 
 ## The Problem (Hackathon Problem Statement #5: Domain-Specialized AI Agents)
