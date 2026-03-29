@@ -59,6 +59,7 @@ export default function TalkPage() {
   const sessionIdRef = useRef("");
   const silenceCountRef = useRef(0);
   const advisoryDeliveredRef = useRef(false);
+  const [fetchingAdvisory, setFetchingAdvisory] = useState(false);
   const [callSummary, setCallSummary] = useState("");
   const [geminiError, setGeminiError] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -128,10 +129,14 @@ export default function TalkPage() {
       silenceCountRef.current = 0;
       addMsg("farmer", transcript, "conversation", transcript);
       setCallState("processing");
+      setFetchingAdvisory(false);
+      const advisoryTimer = setTimeout(() => setFetchingAdvisory(true), 5000);
 
       try {
         const cr = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: transcript, language: lang(), latitude: lat(), longitude: lon() }) });
         const cd = await cr.json();
+        clearTimeout(advisoryTimer);
+        setFetchingAdvisory(false);
         setCallState("speaking");
         const clean = stripMarkdown(cd.response); const cleanEn = stripMarkdown(cd.response_en || cd.response);
         if (clean.includes("Technical issue") || clean.includes("Gemini AI may be overloaded")) setGeminiError(true);
@@ -368,18 +373,22 @@ export default function TalkPage() {
               ))}
 
               {(callState === "processing" || callState === "connecting") && (
-                <div className="flex justify-start" role="status" aria-live="assertive" aria-busy="true" aria-label={messages.filter(m => m.type === "farmer").length >= 2 ? "Generating advice — may take up to 1 minute" : "Processing"}>
+                <div className="flex justify-start" role="status" aria-live="assertive" aria-busy="true" aria-label={fetchingAdvisory ? "Generating advice — may take up to 1 minute" : "Processing"}>
                   <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm">
-                    <div className="flex gap-1.5">
-                      <span className="h-2 w-2 rounded-full bg-[#138808] animate-bounce" />
-                      <span className="h-2 w-2 rounded-full bg-[#FF9933] animate-bounce [animation-delay:150ms]" />
-                      <span className="h-2 w-2 rounded-full bg-[#1a365d] animate-bounce [animation-delay:300ms]" />
-                    </div>
-                    {messages.filter(m => m.type === "farmer").length >= 2 && !advisoryDeliveredRef.current && (
-                      <div className="mt-2 bg-[#FFF7ED] border border-[#FF9933]/30 rounded p-2">
-                        <p className="text-xs font-semibold text-[#1a365d]">🛰️ Generating your advisory...</p>
-                        <p className="text-xs text-gray-700 mt-0.5">Fetching live data from 4 satellites + mandi prices + weather. This may take up to 1 minute.</p>
-                        <p className="text-xs text-gray-700 mt-0.5">You will hear a <strong>beep</strong> when your advice is ready.</p>
+                    {!fetchingAdvisory ? (
+                      <div className="flex gap-1.5">
+                        <span className="h-2 w-2 rounded-full bg-[#138808] animate-bounce" />
+                        <span className="h-2 w-2 rounded-full bg-[#FF9933] animate-bounce [animation-delay:150ms]" />
+                        <span className="h-2 w-2 rounded-full bg-[#1a365d] animate-bounce [animation-delay:300ms]" />
+                      </div>
+                    ) : (
+                      <div className="bg-[#FFF7ED] border border-[#FF9933]/30 rounded p-2.5">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="h-2 w-2 rounded-full bg-[#138808] animate-bounce" />
+                          <p className="text-sm font-semibold text-[#1a365d]">Generating your advisory...</p>
+                        </div>
+                        <p className="text-xs text-gray-700">Fetching live data from 4 satellites + mandi prices + weather.</p>
+                        <p className="text-xs text-gray-700 mt-0.5">This may take up to 1 minute. You will hear a <strong>beep</strong> when ready.</p>
                       </div>
                     )}
                   </div>
