@@ -162,7 +162,7 @@ def _get_model() -> genai.GenerativeModel:
     global _model
     if _model is None:
         _model = genai.GenerativeModel(
-            model_name="gemini-3.0-flash",
+            model_name="gemini-3-flash-preview",
             system_instruction=_SYSTEM_PROMPT,
         )
     return _model

@@ -147,7 +147,7 @@ async def cache_set(key: str, value: dict):
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Gemini model with fallback — primary model may be overloaded
-GEMINI_MODELS = ["gemini-3.0-flash"]
+GEMINI_MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash"]
 
 def _gemini_generate(contents, config=None, use_pro=False):
     """Call Gemini with model fallback."""
@@ -3172,7 +3172,7 @@ async def summarize_advisory(req: SummarizeRequest):
             f"Advisory:\n{req.text}"
         )
         response = gemini_client.models.generate_content(
-            model="gemini-3.0-flash",
+            model="gemini-3-flash-preview",
             contents=prompt,
         )
         summary = response.text.strip() if response.text else req.text[:200]

@@ -219,7 +219,7 @@ weather_advisory_tool = FunctionTool(func=get_weather_advisory)
 # Create the ADK agent
 mausam_guru_agent = Agent(
     name="MausamGuru",
-    model="gemini-3.0-flash",
+    model="gemini-3-flash-preview",
     instruction=AGENT_INSTRUCTION,
     tools=[weather_advisory_tool],
     description=(

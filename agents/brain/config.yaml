@@ -4,7 +4,7 @@
 orchestrator:
   name: "KisanMind Brain"
   description: "Root orchestrator that coordinates specialist agricultural advisory agents"
-  model: "gemini-3.1-pro"
+  model: "gemini-3.1-pro-preview"
   max_tokens: 4096
   temperature: 0.3
 
@@ -12,7 +12,7 @@ sub_agents:
   sat_drishti:
     name: "SatDrishti"
     description: "Satellite-based crop health monitoring using NDVI/EVI/NDWI indices from Earth Engine"
-    model: "gemini-3.0-flash"
+    model: "gemini-3-flash-preview"
     triggers:
       - "crop_health_check"
       - "full_advisory"
@@ -24,7 +24,7 @@ sub_agents:
   mandi_mitra:
     name: "MandiMitra"
     description: "Market intelligence agent for mandi prices, transport logistics, and profit optimization"
-    model: "gemini-3.0-flash"
+    model: "gemini-3-flash-preview"
     triggers:
       - "where_to_sell"
       - "full_advisory"
@@ -36,7 +36,7 @@ sub_agents:
   mausam_guru:
     name: "MausamGuru"
     description: "Weather advisory agent providing forecasts and farming action recommendations"
-    model: "gemini-3.0-flash"
+    model: "gemini-3-flash-preview"
     triggers:
       - "weather_advisory"
       - "full_advisory"
@@ -49,7 +49,7 @@ sub_agents:
   vaani_setu:
     name: "VaaniSetu"
     description: "Voice and language bridge for multilingual farmer interactions"
-    model: "gemini-3.0-flash"
+    model: "gemini-3-flash-preview"
     triggers:
       - "all"
     capabilities:

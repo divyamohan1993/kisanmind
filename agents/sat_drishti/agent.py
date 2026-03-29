@@ -160,7 +160,7 @@ sat_drishti_tool = FunctionTool(func=analyze_crop_health)
 
 sat_drishti_agent = Agent(
     name="sat_drishti",
-    model=os.getenv("SAT_DRISHTI_MODEL", "gemini-3.0-flash"),
+    model=os.getenv("SAT_DRISHTI_MODEL", "gemini-3-flash-preview"),
     description=(
         "SatDrishti (Satellite Eye) analyses crop health from space. "
         "Given a field location and crop type it fetches Sentinel-2 satellite "

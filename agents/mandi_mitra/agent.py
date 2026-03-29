@@ -157,7 +157,7 @@ crop_prices_tool = FunctionTool(func=get_crop_prices)
 
 mandi_mitra_agent = Agent(
     name="mandi_mitra",
-    model="gemini-3.0-flash",
+    model="gemini-3-flash-preview",
     description=(
         "MandiMitra (Market Friend) helps farmers identify the most profitable "
         "wholesale market (mandi) to sell their crops. It combines live market "

@@ -257,7 +257,7 @@ def get_routing_target(intent: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 vaani_setu_agent = Agent(
-    model="gemini-3.0-flash",
+    model="gemini-3-flash-preview",
     name="vaani_setu",
     description=(
         "VaaniSetu (Voice Bridge) — handles voice input/output for Indian "
