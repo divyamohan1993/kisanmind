@@ -1397,7 +1397,7 @@ End with: "Yeh aaj ki data ke hisaab se hai. Final faisla aapka hai."
         try:
             verify_prompt = f"""Fact-check: Are prices/distances/names in this advisory consistent with source data? Advisory: "{text[:400]}" Source: Best={best_mandi['market']} {best_mandi['modal_price']}Rs, Local={local_mandi_name} {local_price}Rs. Return PASS or FAIL:<reason>."""
             verify_resp = _gemini_generate(verify_prompt)
-            log.info(f"Hallucination check (bg): {verify_resp.text.strip()}")
+            log.info(f"Hallucination check (bg): {(verify_resp.text or '').strip()}")
         except Exception as e:
             log.warning(f"Hallucination bg check failed: {e}")
 
@@ -2687,7 +2687,8 @@ Return ONLY 3 facts, one per line. No numbering, no bullets. Keep each under 20 
     try:
         loop = asyncio.get_event_loop()
         resp = await loop.run_in_executor(None, lambda: _gemini_generate(prompt))
-        facts = [line.strip() for line in resp.text.strip().split("\n") if line.strip()][:3]
+        raw = (resp.text or "").strip()
+        facts = [line.strip() for line in raw.split("\n") if line.strip()][:3] if raw else []
 
         # Translate if needed
         if req.language != "en":
@@ -2924,7 +2925,9 @@ Return ONLY valid JSON (no markdown, no explanation):
         response = await _loop.run_in_executor(
             None, lambda: _gemini_generate(prompt)
         )
-        text = response.text.strip()
+        text = (response.text or "").strip()
+        if not text:
+            raise ValueError("Gemini returned empty response")
         # Strip markdown code fences if present
         if text.startswith("```"):
             text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -3107,7 +3110,7 @@ async def text_chat(req: ChatRequest):
                             use_pro=False,
                         ),
                     )
-                    response_text = response2.text.strip()
+                    response_text = (response2.text or "").strip() or "I could not generate a response. Please try again."
                     session["history"].append({"role": "model", "parts": [{"text": response_text}]})
 
                     display_text = response_text
@@ -3124,7 +3127,7 @@ async def text_chat(req: ChatRequest):
                         "call_complete": call_done,
                     }
 
-        response_text = response.text.strip()
+        response_text = (response.text or "").strip() or "I could not generate a response. Please try again."
         session["history"].append({"role": "model", "parts": [{"text": response_text}]})
 
         display_text = response_text
