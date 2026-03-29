@@ -2523,6 +2523,35 @@ async def text_to_speech(req: TTSRequest):
     }
 
 
+class TranslateRequest(BaseModel):
+    texts: list[str]
+    target_language: str = "hi"
+
+
+@app.post("/api/translate")
+async def batch_translate(req: TranslateRequest):
+    """Batch translate texts to target language. Used for re-translating chat on language switch."""
+    if req.target_language == "en":
+        return {"translated": req.texts}
+
+    try:
+        translate_client = translate.Client()
+        translated = []
+        for text in req.texts:
+            if not text.strip():
+                translated.append(text)
+                continue
+            result = translate_client.translate(
+                text, target_language=req.target_language, source_language="en"
+            )
+            import html
+            translated.append(html.unescape(result["translatedText"]))
+        return {"translated": translated}
+    except Exception as e:
+        log.warning(f"Batch translate failed: {e}")
+        return {"translated": req.texts}
+
+
 @app.websocket("/ws/chat")
 async def websocket_chat(ws: WebSocket):
     """WebSocket endpoint for Gemini Live farmer conversations.

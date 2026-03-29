@@ -30,6 +30,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 interface ChatMessage {
   type: "farmer" | "kisanmind";
   text: string;
+  text_en: string;  // English source — used for re-translation on language switch
   timestamp: Date;
   kind?: "conversation" | "advisory" | "status";
 }
@@ -97,8 +98,35 @@ export default function TalkPage() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const addMessage = useCallback((type: "farmer" | "kisanmind", text: string, kind?: "conversation" | "advisory" | "status") => {
-    setMessages((prev) => [...prev, { type, text, timestamp: new Date(), kind }]);
+  // Re-translate all messages when language changes
+  useEffect(() => {
+    if (messages.length === 0) return;
+    if (language === "en") {
+      // English — just use text_en directly
+      setMessages((prev) => prev.map((m) => ({ ...m, text: m.text_en })));
+      return;
+    }
+    // Batch translate all English source texts to new language
+    const texts = messages.map((m) => m.text_en);
+    fetch(`${API_BASE}/api/translate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ texts, target_language: language }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.translated && data.translated.length === messages.length) {
+          setMessages((prev) =>
+            prev.map((m, i) => ({ ...m, text: data.translated[i] }))
+          );
+        }
+      })
+      .catch(() => {}); // keep existing text on failure
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language]);
+
+  const addMessage = useCallback((type: "farmer" | "kisanmind", text: string, kind?: "conversation" | "advisory" | "status", textEn?: string) => {
+    setMessages((prev) => [...prev, { type, text, text_en: textEn || text, timestamp: new Date(), kind }]);
   }, []);
 
   /* ---- PCM playback: play Gemini's audio chunks ---- */
@@ -171,7 +199,8 @@ export default function TalkPage() {
             addMessage(
               msg.speaker === "farmer" ? "farmer" : "kisanmind",
               msg.text,
-              "conversation"
+              "conversation",
+              msg.text_en || msg.text
             );
             break;
 
@@ -262,7 +291,7 @@ export default function TalkPage() {
           <span className="text-base font-bold gradient-text">KisanMind</span>
         </Link>
 
-        {!isInCall && callState !== "ended" && (
+        {!isInCall && (
           <button
             onClick={() => setShowLangPicker(!showLangPicker)}
             className="flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/15"
@@ -286,7 +315,7 @@ export default function TalkPage() {
       </div>
 
       {/* Language picker */}
-      {showLangPicker && !isInCall && callState !== "ended" && (
+      {showLangPicker && !isInCall && (
         <div className="absolute top-14 left-0 right-0 z-50 bg-[#0d1117] border-b border-white/10 px-4 py-4 shadow-2xl">
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 max-w-2xl mx-auto">
             {LANGUAGES.map((lang) => (
