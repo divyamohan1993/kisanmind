@@ -62,6 +62,7 @@ GCS_CACHE_BUCKET = "kisanmind-cache"
 _ADVISORY_TTL = 15 * 60      # 15 min — mandi prices can shift intraday
 _NDVI_TTL = 6 * 60 * 60      # 6 hours — satellite data updates weekly
 _MANDI_RAW_TTL = 60 * 60     # 1 hour — raw mandi data from AgMarkNet
+_KVK_TTL = 30 * 24 * 60 * 60   # 30 days — KVKs don't move
 
 # L1: in-memory (fast, lost on restart)
 _l1_cache: dict[str, tuple[float, dict]] = {}
@@ -257,6 +258,7 @@ class AdvisoryRequest(BaseModel):
     crop: str
     language: str = "hi"
     intent: str = "full_advisory"
+    quantity_quintals: float = 0
 
 
 class TTSRequest(BaseModel):
@@ -380,9 +382,6 @@ async def fetch_mandi_prices(crop: str, state: str) -> list[dict]:
     if not records:
         raise HTTPException(404, f"No mandi prices found for {crop}. Both AgMarkNet and cache unavailable.")
 
-    if not records:
-        raise HTTPException(404, f"No mandi prices found for {crop}. AgMarkNet returned 0 records.")
-
     mandis = []
     for r in records:
         try:
@@ -407,6 +406,69 @@ async def fetch_mandi_prices(crop: str, state: str) -> list[dict]:
         raise HTTPException(404, f"No valid mandi prices (modal_price > 0) found for {crop}.")
 
     return mandis
+
+
+def analyze_price_trend(mandis: list[dict]) -> dict:
+    """Analyze price trend from available mandi data. Uses arrival_date to detect multi-day patterns."""
+    if not mandis:
+        return {"trend": "unknown", "trend_percent": 0, "confidence": "LOW", "detail": "No price data available."}
+
+    # Group prices by date to detect trends
+    from collections import defaultdict
+    prices_by_date: dict[str, list[float]] = defaultdict(list)
+    for m in mandis:
+        date_str = m.get("arrival_date", "")
+        if date_str and m.get("modal_price"):
+            prices_by_date[date_str].append(m["modal_price"])
+
+    # Compute daily average price
+    daily_avgs = []
+    for date_str in sorted(prices_by_date.keys()):
+        prices = prices_by_date[date_str]
+        daily_avgs.append({"date": date_str, "avg_price": sum(prices) / len(prices)})
+
+    if len(daily_avgs) < 2:
+        # Only one date — can't compute trend, but give current price context
+        all_prices = [m["modal_price"] for m in mandis if m.get("modal_price")]
+        avg = sum(all_prices) / len(all_prices) if all_prices else 0
+        mn = min(all_prices) if all_prices else 0
+        mx = max(all_prices) if all_prices else 0
+        return {
+            "trend": "insufficient_data",
+            "trend_percent": 0,
+            "avg_price": round(avg),
+            "min_price": round(mn),
+            "max_price": round(mx),
+            "data_points": len(daily_avgs),
+            "confidence": "LOW",
+            "detail": f"Only one day of data available. Average price Rs {round(avg)}/quintal across {len(all_prices)} mandis.",
+        }
+
+    # Compute trend: compare latest vs earliest
+    oldest_price = daily_avgs[0]["avg_price"]
+    newest_price = daily_avgs[-1]["avg_price"]
+    trend_pct = ((newest_price - oldest_price) / oldest_price * 100) if oldest_price > 0 else 0
+
+    if trend_pct > 5:
+        trend = "rising"
+    elif trend_pct < -5:
+        trend = "falling"
+    else:
+        trend = "stable"
+
+    confidence = "HIGH" if len(daily_avgs) >= 5 else ("MEDIUM" if len(daily_avgs) >= 3 else "LOW")
+
+    return {
+        "trend": trend,
+        "trend_percent": round(trend_pct, 1),
+        "oldest_date": daily_avgs[0]["date"],
+        "newest_date": daily_avgs[-1]["date"],
+        "oldest_avg_price": round(oldest_price),
+        "newest_avg_price": round(newest_price),
+        "data_points": len(daily_avgs),
+        "confidence": confidence,
+        "detail": f"Price {'rose' if trend_pct > 0 else 'fell'} {abs(round(trend_pct, 1))}% from Rs {round(oldest_price)} to Rs {round(newest_price)} over {len(daily_avgs)} days.",
+    }
 
 
 async def get_distances(origin_lat: float, origin_lon: float, mandis: list[dict]) -> list[dict]:
@@ -459,23 +521,46 @@ async def get_distances(origin_lat: float, origin_lon: float, mandis: list[dict]
     return enriched
 
 
-def calculate_net_profits(mandis: list[dict]) -> list[dict]:
-    """Calculate net profit for each mandi: modal_price - transport_cost - commission."""
+# Spoilage rates: % value loss per hour without cold chain (agricultural research data)
+SPOILAGE_RATE_PER_HOUR = {
+    "tomato": 0.005, "strawberry": 0.008, "mango": 0.004, "banana": 0.003,
+    "spinach": 0.010, "capsicum": 0.004, "grapes": 0.006, "papaya": 0.005,
+    "potato": 0.0005, "onion": 0.0005, "garlic": 0.0005,
+    "wheat": 0.0001, "rice": 0.0001, "maize": 0.0001,
+    "cauliflower": 0.006, "cabbage": 0.004, "brinjal": 0.004,
+    "apple": 0.002, "orange": 0.002, "guava": 0.003,
+}
+DEFAULT_SPOILAGE_RATE = 0.003  # 0.3% per hour for unknown crops
+
+
+def calculate_net_profits(mandis: list[dict], crop: str = "") -> list[dict]:
+    """Calculate net profit: modal_price - transport - commission - spoilage loss."""
     TRANSPORT_COST_PER_KM_PER_QUINTAL = 3.5
     COMMISSION_RATE = 0.04  # 4%
+
+    crop_lower = crop.lower().strip()
+    spoilage_rate = SPOILAGE_RATE_PER_HOUR.get(crop_lower, DEFAULT_SPOILAGE_RATE)
 
     for m in mandis:
         price = m["modal_price"]
         dist = m.get("distance_km")
+        duration_min = m.get("duration_minutes")
         if dist is not None:
             transport_cost = dist * TRANSPORT_COST_PER_KM_PER_QUINTAL
             commission = COMMISSION_RATE * price
+            # Spoilage: value lost during transit (perishable crops)
+            transit_hours = (duration_min / 60) if duration_min else (dist / 40)  # assume 40 km/h if no duration
+            spoilage_loss = price * spoilage_rate * transit_hours
             m["transport_cost_per_quintal"] = round(transport_cost, 2)
             m["commission_per_quintal"] = round(commission, 2)
-            m["net_profit_per_quintal"] = round(price - transport_cost - commission, 2)
+            m["spoilage_loss_per_quintal"] = round(spoilage_loss, 2)
+            m["transit_hours"] = round(transit_hours, 1)
+            m["net_profit_per_quintal"] = round(price - transport_cost - commission - spoilage_loss, 2)
         else:
             m["transport_cost_per_quintal"] = None
             m["commission_per_quintal"] = None
+            m["spoilage_loss_per_quintal"] = None
+            m["transit_hours"] = None
             m["net_profit_per_quintal"] = None
 
     return mandis
@@ -527,6 +612,132 @@ async def fetch_weather(lat: float, lon: float) -> dict:
     }
 
 
+def compute_advisory_confidence(
+    ndvi_data: Optional[dict],
+    ndvi_trajectory: dict,
+    weather: dict,
+    price_trend: dict,
+    mandis: list[dict],
+) -> dict:
+    """Compute confidence scores for each data layer to gate advisory output."""
+    scores = {}
+
+    # Satellite confidence
+    if ndvi_data:
+        image_date = ndvi_data.get("image_date", "")
+        try:
+            days_old = (datetime.utcnow() - datetime.strptime(image_date, "%Y-%m-%d")).days
+        except (ValueError, TypeError):
+            days_old = 99
+        sat_score = 0.5
+        if days_old <= 3:
+            sat_score += 0.3
+        elif days_old <= 7:
+            sat_score += 0.1
+        else:
+            sat_score -= 0.2
+        num_obs = ndvi_trajectory.get("num_observations", 1)
+        if num_obs >= 4:
+            sat_score += 0.2
+        elif num_obs >= 2:
+            sat_score += 0.1
+        scores["satellite"] = {"score": min(1.0, max(0.0, round(sat_score, 2))),
+                               "level": "HIGH" if sat_score >= 0.7 else ("MEDIUM" if sat_score >= 0.4 else "LOW"),
+                               "days_old": days_old}
+    else:
+        scores["satellite"] = {"score": 0, "level": "UNAVAILABLE", "days_old": None}
+
+    # Weather confidence (forecast is more reliable for days 1-2)
+    weather_score = 0.7  # Base for forecast
+    daily = weather.get("daily_forecast", [])
+    if len(daily) >= 3:
+        weather_score += 0.1
+    scores["weather"] = {"score": round(weather_score, 2),
+                         "level": "HIGH" if weather_score >= 0.7 else "MEDIUM",
+                         "days_covered": len(daily)}
+
+    # Price confidence
+    price_conf = price_trend.get("confidence", "LOW")
+    price_score = {"HIGH": 0.8, "MEDIUM": 0.5, "LOW": 0.3}.get(price_conf, 0.3)
+    scores["price"] = {"score": price_score, "level": price_conf,
+                       "data_points": price_trend.get("data_points", 0)}
+
+    # Overall
+    all_scores = [s["score"] for s in scores.values() if isinstance(s.get("score"), (int, float)) and s["score"] > 0]
+    overall = sum(all_scores) / len(all_scores) if all_scores else 0.3
+    scores["overall"] = {"score": round(overall, 2),
+                         "level": "HIGH" if overall >= 0.65 else ("MEDIUM" if overall >= 0.4 else "LOW")}
+
+    return scores
+
+
+async def find_nearest_kvk(lat: float, lon: float) -> Optional[dict]:
+    """Find nearest Krishi Vigyan Kendra using Google Places API (New)."""
+    cache_key = f"kvk:{round(lat, 1)}:{round(lon, 1)}"
+    cached = await cache_get(cache_key, _KVK_TTL)
+    if cached:
+        return cached
+
+    url = "https://places.googleapis.com/v1/places:searchText"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.location",
+    }
+    body = {
+        "textQuery": "Krishi Vigyan Kendra",
+        "locationBias": {
+            "circle": {
+                "center": {"latitude": lat, "longitude": lon},
+                "radius": 100000.0,  # 100 km radius
+            }
+        },
+        "maxResultCount": 1,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(url, json=body, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        places = data.get("places", [])
+        if not places:
+            return {"name": "KVK", "address": "Not found nearby", "phone": "1800-180-1551", "distance_km": None, "helpline": "1800-180-1551"}
+
+        place = places[0]
+        kvk_name = place.get("displayName", {}).get("text", "Krishi Vigyan Kendra")
+        kvk_address = place.get("formattedAddress", "")
+        kvk_phone = place.get("nationalPhoneNumber", "1800-180-1551")
+        kvk_lat = place.get("location", {}).get("latitude")
+        kvk_lon = place.get("location", {}).get("longitude")
+
+        # Calculate straight-line distance (good enough for KVK)
+        kvk_distance = None
+        if kvk_lat and kvk_lon:
+            # Haversine formula
+            R = 6371  # Earth radius in km
+            dlat = math.radians(kvk_lat - lat)
+            dlon = math.radians(kvk_lon - lon)
+            a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat)) * math.cos(math.radians(kvk_lat)) * math.sin(dlon / 2) ** 2
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            kvk_distance = round(R * c, 1)
+
+        result = {
+            "name": kvk_name,
+            "address": kvk_address,
+            "phone": kvk_phone or "1800-180-1551",
+            "distance_km": kvk_distance,
+            "helpline": "1800-180-1551",
+        }
+        await cache_set(cache_key, result)
+        return result
+
+    except Exception as e:
+        log.warning(f"KVK search failed: {e}")
+        return {"name": "KVK", "address": "Search unavailable", "phone": "1800-180-1551", "distance_km": None, "helpline": "1800-180-1551"}
+
+
 async def generate_advisory_with_gemini(
     language: str,
     location_name: str,
@@ -537,49 +748,160 @@ async def generate_advisory_with_gemini(
     local_mandi: Optional[dict],
     weather: dict,
     ndvi_data: Optional[dict] = None,
+    ndvi_trajectory: dict = None,
+    growth_stage: dict = None,
+    price_trend: dict = None,
+    confidence: dict = None,
+    nearest_kvk: dict = None,
+    quantity_quintals: float = 0,
 ) -> str:
-    """Send all real data to Gemini 2.5 Flash and get a conversational advisory."""
+    """Send pre-computed inferences to Gemini and get a human, conversational advisory."""
     language_name = LANGUAGE_NAMES.get(language, "Hindi")
 
     local_mandi_name = local_mandi["market"] if local_mandi else "N/A"
     local_price = local_mandi["modal_price"] if local_mandi else 0
-    best_price = best_mandi["net_profit_per_quintal"] or best_mandi["modal_price"]
-    price_advantage = round(best_price - local_price, 2) if local_mandi and local_price else 0
+    best_price = best_mandi.get("net_profit_per_quintal") or best_mandi["modal_price"]
+    price_advantage = round(best_price - (local_mandi.get("net_profit_per_quintal", local_price) if local_mandi else local_price), 2) if local_mandi else 0
 
-    # Build satellite data section for the prompt
+    # Build satellite assessment section
     if ndvi_data:
-        satellite_section = f"""Satellite Crop Health (Sentinel-2, date: {ndvi_data['image_date']}):
-  NDVI: {ndvi_data['ndvi']} (health: {ndvi_data['health']}, trend: {ndvi_data['trend']})
-  EVI: {ndvi_data['evi']}, NDWI: {ndvi_data['ndwi']}
-  Note: NDVI > 0.6 = healthy, 0.4-0.6 = moderate, < 0.4 = stressed. NDWI < -0.3 = dry soil."""
+        days_old = 0
+        try:
+            days_old = (datetime.utcnow() - datetime.strptime(ndvi_data.get("image_date", ""), "%Y-%m-%d")).days
+        except (ValueError, TypeError):
+            pass
+
+        trajectory_info = ""
+        if ndvi_trajectory:
+            trajectory_info = f"""
+  Growth trajectory (last {ndvi_trajectory.get('num_observations', 0)} observations): {ndvi_trajectory.get('trajectory', 'unknown').upper()}
+  District benchmark: {ndvi_trajectory.get('benchmark_comparison', 'not available')}
+  District average NDVI: {ndvi_trajectory.get('district_avg_ndvi', 'N/A')}"""
+
+        satellite_section = f"""SATELLITE ASSESSMENT (image from {ndvi_data['image_date']}, i.e. {days_old} days old):
+  Your field health: {ndvi_data['health']} (NDVI {ndvi_data['ndvi']})
+  Trend: {ndvi_data['trend']}{trajectory_info}
+  IMPORTANT: This image is {days_old} days old. If farmer irrigated, sprayed, or harvested in the last {days_old} days, it will NOT show in this data. Next satellite update in 2-5 days.
+  Confidence: {confidence.get('satellite', {}).get('level', 'MEDIUM') if confidence else 'MEDIUM'}"""
     else:
-        satellite_section = "Satellite crop health data: unavailable"
+        satellite_section = "SATELLITE DATA: Not available for this location today. Skip crop health section."
 
-    prompt = f"""You are KisanMind, a friendly agricultural advisor. Generate advisory in plain English.
+    # Growth stage section
+    stage_section = ""
+    if growth_stage and growth_stage.get("stage") != "unknown":
+        stage_section = f"\nGROWTH STAGE: {crop} estimated at {growth_stage['stage']} stage ({growth_stage.get('detail', '')})"
 
-RULES:
-- Plain text only. NO markdown, NO asterisks, NO bold, NO bullets, NO numbered lists.
-- Simple conversational tone — like talking to a friend on phone. Use short sentences.
-- ONLY state facts from the data below. DO NOT invent anything.
-- For pesticide/chemical treatment: refer to nearest Krishi Vigyan Kendra (KVK), helpline 1800-180-1551.
-- Under 200 words.
+    # Price trend section
+    trend_section = ""
+    if price_trend:
+        trend_section = f"""
+PRICE TREND ({price_trend.get('confidence', 'LOW')} confidence):
+  {price_trend.get('detail', 'No trend data.')}
+  Trend direction: {price_trend.get('trend', 'unknown').upper()}"""
 
-DATA:
+    # Spoilage info for best mandi
+    spoilage_note = ""
+    if best_mandi.get("spoilage_loss_per_quintal") and best_mandi["spoilage_loss_per_quintal"] > 10:
+        spoilage_note = f"""
+SPOILAGE WARNING: {crop} is perishable. Transit to {best_mandi['market']} takes {best_mandi.get('transit_hours', '?')} hours.
+  Estimated spoilage loss: Rs {best_mandi['spoilage_loss_per_quintal']}/quintal in transit.
+  TIP: Leave early morning (before 5 AM) to reduce heat damage."""
+
+    # Quantity calculation
+    quantity_section = ""
+    if quantity_quintals > 0:
+        total_best = round(best_mandi.get("net_profit_per_quintal", 0) * quantity_quintals)
+        total_local = round((local_mandi.get("net_profit_per_quintal", local_price) if local_mandi else 0) * quantity_quintals)
+        extra = total_best - total_local
+        quantity_section = f"""
+QUANTITY CALCULATION ({quantity_quintals} quintals):
+  At {best_mandi['market']}: {quantity_quintals} x Rs {best_mandi.get('net_profit_per_quintal', 0)} = Rs {total_best} total in hand
+  At {local_mandi_name}: {quantity_quintals} x Rs {local_mandi.get('net_profit_per_quintal', local_price) if local_mandi else 0} = Rs {total_local} total in hand
+  Difference: Rs {extra} more at {best_mandi['market']}"""
+
+    # KVK section
+    kvk_section = ""
+    if nearest_kvk:
+        kvk_section = f"""
+NEAREST KVK: {nearest_kvk['name']}, {nearest_kvk.get('distance_km', '?')} km away
+  Address: {nearest_kvk.get('address', '')}
+  Phone: {nearest_kvk.get('phone', '1800-180-1551')}
+  Toll-free helpline: 1800-180-1551"""
+
+    # Weather with crop interaction
+    weather_actions = ""
+    daily = weather.get("daily_forecast", [])
+    if daily and growth_stage:
+        stage = growth_stage.get("stage", "")
+        rain_days = [d for d in daily[:3] if d.get("precipitation_mm", 0) > 5]
+        high_temp_days = [d for d in daily[:3] if (d.get("max_temp_c") or 0) > 38]
+        if rain_days:
+            rain_day = rain_days[0]
+            weather_actions += f"\n  RAIN ALERT: {rain_day['precipitation_mm']}mm expected on {rain_day['date']}."
+            if stage in ("flowering", "fruit_setting"):
+                weather_actions += " Don't spray before rain. Pollination may slow — this is normal."
+            if stage in ("ripening", "harvest_ready", "grain_filling"):
+                weather_actions += f" If {crop} is ready, harvest BEFORE the rain."
+            weather_actions += " Do NOT irrigate today — save water."
+        elif not rain_days and high_temp_days:
+            weather_actions += f"\n  HEAT ALERT: {high_temp_days[0]['max_temp_c']}C expected. Irrigate early morning (before 8 AM). Afternoon watering wastes 30% to evaporation."
+        else:
+            weather_actions += "\n  Weather is favorable. Normal farming activities can continue."
+
+    prompt = f"""You are KisanMind — a wise, warm farming neighbor who uses modern data to help. Generate advisory in PLAIN ENGLISH first (it will be translated later).
+
+PERSONALITY RULES:
+- Talk like a knowledgeable elder neighbor, NOT a government officer or computer.
+- Use simple, warm language. Say "bhai" feel. Be encouraging and practical.
+- NEVER say NDVI, EVI, NDWI, satellite index, or any technical jargon.
+- Convert satellite health to: "fasal ki sehat achhi/theek/kamzor hai"
+- ALWAYS state data age: "4 din purani satellite image se", "aaj ke rate", "aaj ka mausam"
+- If satellite data is old (>5 days), explicitly say recent farm actions won't be reflected.
+- Keep under 120 words. Farmer is in a field, not reading a report.
+
+CONFIDENCE RULES:
+- HIGH confidence data -> state as clear advice: "Kal paani dein."
+- MEDIUM confidence -> hedge: "Rate badh rahe hain, shayad aur badh sakte hain."
+- LOW confidence -> skip OR say "KVK se puchh lein."
+- NEVER guarantee yields, prices, or outcomes. Say "based on today's data".
+
+SAFETY RULES:
+- NEVER recommend any pesticide or chemical by brand name.
+- NEVER give loan, credit, or insurance advice.
+- For ANY pest/disease concern -> refer to KVK only.
+- ALWAYS end with KVK info and disclaimer.
+
+DATA (pre-computed — relay these inferences, don't invent new ones):
 Location: {location_name}, {state}
 Crop: {crop}
-Best mandi: {best_mandi['market']} at Rs {best_mandi['modal_price']} per quintal, {best_mandi.get('distance_km', '?')} km away, {best_mandi.get('duration_text', '?')} travel time
-Local mandi: {local_mandi_name} at Rs {local_price} per quintal
-Extra profit at best mandi: Rs {price_advantage} per quintal more
-Weather forecast: {weather['summary']}
+
+MANDI DATA:
+Best mandi: {best_mandi['market']} — Rs {best_mandi['modal_price']}/quintal, {best_mandi.get('distance_km', '?')} km, {best_mandi.get('duration_text', '?')} travel
+  Net profit after transport+commission+spoilage: Rs {best_mandi.get('net_profit_per_quintal', '?')}/quintal
+Local mandi: {local_mandi_name} — Rs {local_price}/quintal
+  Net profit: Rs {local_mandi.get('net_profit_per_quintal', '?') if local_mandi else '?'}/quintal
+Extra earning at best mandi: Rs {price_advantage}/quintal more
+{trend_section}
+{spoilage_note}
+{quantity_section}
+
 {satellite_section}
+{stage_section}
 
-Cover these topics:
-- Which mandi to sell at (best price after transport cost)
-- Weather actions for next 2-3 days (what to do, what to avoid)
-- Crop health from satellite (explain simply)
-- Refer to KVK if any pest/disease issue detected
+WEATHER (today's forecast from Open-Meteo):
+{weather['summary']}
+{weather_actions}
 
-End with: "This data is from today's AgMarkNet, satellite and weather reports. The final decision is yours."
+{kvk_section}
+
+OUTPUT FORMAT (exactly 5 short sections, in this order):
+1. Crop health (1-2 sentences, state satellite data age)
+2. Weather action (1-2 sentences, specific DO or DON'T with date)
+3. Best mandi recommendation (price, distance, net profit)
+4. Sell timing advice (based on price trend, hedge if low confidence)
+5. KVK info + disclaimer
+
+End with: "Yeh aaj ki data ke hisaab se hai. Final faisla aapka hai."
 """
 
     response = gemini_client.models.generate_content(
@@ -611,7 +933,6 @@ End with: "This data is from today's AgMarkNet, satellite and weather reports. T
             log.warning(f"Translation to {language} failed, keeping English: {e}")
 
     # Hallucination verification runs in BACKGROUND — don't block the response
-    # The advisory is already constrained by the strict prompt rules above
     async def _verify_in_background():
         try:
             verify_prompt = f"""Fact-check: Are prices/distances/names in this advisory consistent with source data? Advisory: "{text[:400]}" Source: Best={best_mandi['market']} {best_mandi['modal_price']}Rs, Local={local_mandi_name} {local_price}Rs. Return PASS or FAIL:<reason>."""
@@ -627,6 +948,64 @@ End with: "This data is from today's AgMarkNet, satellite and weather reports. T
 # ---------------------------------------------------------------------------
 # Earth Engine NDVI helpers
 # ---------------------------------------------------------------------------
+
+# Crop growth stage estimation via Growing Degree Days (GDD)
+CROP_GDD_STAGES = {
+    "tomato": {"t_base": 10, "stages": [(0, "seedling"), (300, "vegetative"), (600, "flowering"), (900, "fruit_setting"), (1200, "ripening"), (1500, "harvest_ready")]},
+    "wheat": {"t_base": 5, "stages": [(0, "seedling"), (200, "tillering"), (500, "stem_extension"), (800, "heading"), (1100, "grain_filling"), (1500, "harvest_ready")]},
+    "rice": {"t_base": 10, "stages": [(0, "seedling"), (300, "tillering"), (600, "panicle_init"), (900, "flowering"), (1200, "grain_filling"), (1500, "harvest_ready")]},
+    "potato": {"t_base": 7, "stages": [(0, "sprouting"), (200, "vegetative"), (500, "tuber_init"), (800, "tuber_bulking"), (1100, "maturation")]},
+    "onion": {"t_base": 10, "stages": [(0, "seedling"), (250, "vegetative"), (500, "bulb_formation"), (800, "maturation")]},
+    "capsicum": {"t_base": 12, "stages": [(0, "seedling"), (250, "vegetative"), (500, "flowering"), (750, "fruit_setting"), (1000, "ripening")]},
+    "cabbage": {"t_base": 5, "stages": [(0, "seedling"), (200, "vegetative"), (500, "head_formation"), (800, "harvest_ready")]},
+    "cauliflower": {"t_base": 5, "stages": [(0, "seedling"), (200, "vegetative"), (450, "curd_formation"), (700, "harvest_ready")]},
+    "apple": {"t_base": 7, "stages": [(0, "dormant"), (200, "bud_break"), (500, "flowering"), (900, "fruit_development"), (1500, "harvest_ready")]},
+    "mango": {"t_base": 15, "stages": [(0, "vegetative"), (300, "flowering"), (600, "fruit_setting"), (1000, "fruit_development"), (1500, "harvest_ready")]},
+}
+
+
+def estimate_growth_stage(crop: str, weather_data: dict) -> dict:
+    """Estimate crop growth stage from accumulated GDD using weather data."""
+    crop_lower = crop.lower().strip()
+    crop_info = CROP_GDD_STAGES.get(crop_lower)
+    if not crop_info:
+        return {"stage": "unknown", "gdd_accumulated": 0, "confidence": "LOW", "detail": f"No GDD model available for {crop}."}
+
+    t_base = crop_info["t_base"]
+    stages = crop_info["stages"]
+
+    # Accumulate GDD from weather forecast (approximate — uses forecast as proxy)
+    # In a real scenario this would use historical weather from sowing date
+    daily = weather_data.get("daily_forecast", [])
+    total_gdd = 0
+    for d in daily:
+        t_max = d.get("max_temp_c", 25)
+        t_min = d.get("min_temp_c", 15)
+        if t_max is not None and t_min is not None:
+            daily_gdd = max(0, (t_max + t_min) / 2 - t_base)
+            total_gdd += daily_gdd
+
+    # Since we only have 5-day forecast, estimate season GDD from average daily GDD
+    avg_daily_gdd = total_gdd / len(daily) if daily else 15
+    # Typical Indian crop season is 90-150 days — estimate total accumulated GDD
+    # Use midpoint of season (75 days) as rough estimate
+    estimated_total_gdd = avg_daily_gdd * 75
+
+    # Find current stage
+    current_stage = stages[0][1]
+    for gdd_threshold, stage_name in stages:
+        if estimated_total_gdd >= gdd_threshold:
+            current_stage = stage_name
+
+    return {
+        "stage": current_stage,
+        "gdd_accumulated": round(estimated_total_gdd),
+        "avg_daily_gdd": round(avg_daily_gdd, 1),
+        "confidence": "MEDIUM",
+        "detail": f"Estimated stage: {current_stage} (approx {round(estimated_total_gdd)} GDD at avg {round(avg_daily_gdd, 1)} GDD/day).",
+    }
+
+
 def _compute_ndvi_sync(lat: float, lon: float) -> dict:
     """Blocking EE computation — runs in a thread pool. Returns NDVI data dict."""
     point = ee.Geometry.Point([lon, lat])
@@ -754,6 +1133,106 @@ def _compute_ndvi_sync(lat: float, lon: float) -> dict:
     }
 
 
+def _compute_ndvi_trajectory(lat: float, lon: float) -> dict:
+    """Compute NDVI trajectory over multiple observations + district benchmark. Runs in thread pool."""
+    point = ee.Geometry.Point([lon, lat])
+    buffer = point.buffer(500)
+    district_buffer = point.buffer(10000)  # 10km radius for district benchmark
+
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=60)
+
+    collection = (
+        ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(point)
+        .filterDate(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30))
+        .sort("system:time_start", False)
+    )
+
+    count = collection.size().getInfo()
+    if count == 0:
+        return {}
+
+    # Get time series (up to 6 most recent observations)
+    num_images = min(count, 6)
+    images_list = collection.toList(num_images)
+
+    ndvi_series = []
+    for i in range(num_images):
+        try:
+            img = ee.Image(images_list.get(i))
+            ndvi = img.normalizedDifference(["B8", "B4"])
+            stats = ndvi.reduceRegion(reducer=ee.Reducer.mean(), geometry=buffer, scale=10, maxPixels=1e6).getInfo()
+            date_ms = img.get("system:time_start").getInfo()
+            img_date = datetime.utcfromtimestamp(date_ms / 1000).strftime("%Y-%m-%d")
+            val = stats.get("nd")  # normalizedDifference returns 'nd'
+            if val is None:
+                val = stats.get("NDVI", stats.get("B8", None))  # fallback keys
+            if val is not None:
+                ndvi_series.append({"date": img_date, "ndvi": round(val, 4)})
+        except Exception:
+            continue
+
+    if not ndvi_series:
+        return {}
+
+    # Trajectory classification
+    if len(ndvi_series) >= 2:
+        latest = ndvi_series[0]["ndvi"]
+        oldest = ndvi_series[-1]["ndvi"]
+        diff = latest - oldest
+        if diff > 0.05:
+            trajectory = "improving"
+        elif diff < -0.05:
+            trajectory = "declining"
+        elif abs(diff) < 0.02 and latest > 0.5:
+            trajectory = "plateauing"
+        else:
+            trajectory = "stable"
+    else:
+        trajectory = "single_observation"
+
+    # District benchmark — mean NDVI for 10km radius
+    district_ndvi = None
+    try:
+        latest_img = ee.Image(images_list.get(0))
+        ndvi_img = latest_img.normalizedDifference(["B8", "B4"])
+        district_stats = ndvi_img.reduceRegion(
+            reducer=ee.Reducer.mean(), geometry=district_buffer, scale=100, maxPixels=1e8
+        ).getInfo()
+        district_ndvi = district_stats.get("nd")
+        if district_ndvi is not None:
+            district_ndvi = round(district_ndvi, 4)
+    except Exception:
+        pass
+
+    # Data age
+    latest_date = ndvi_series[0]["date"]
+    days_since = (datetime.utcnow() - datetime.strptime(latest_date, "%Y-%m-%d")).days
+
+    # Benchmark comparison
+    benchmark_comparison = None
+    if district_ndvi and ndvi_series[0]["ndvi"] and district_ndvi > 0:
+        pct_diff = round((ndvi_series[0]["ndvi"] - district_ndvi) / district_ndvi * 100, 1)
+        if pct_diff > 5:
+            benchmark_comparison = f"{pct_diff}% above district average (good)"
+        elif pct_diff < -5:
+            benchmark_comparison = f"{abs(pct_diff)}% below district average (needs attention)"
+        else:
+            benchmark_comparison = "similar to district average"
+
+    return {
+        "ndvi_series": ndvi_series,
+        "trajectory": trajectory,
+        "district_avg_ndvi": district_ndvi,
+        "benchmark_comparison": benchmark_comparison,
+        "days_since_image": days_since,
+        "latest_image_date": latest_date,
+        "num_observations": len(ndvi_series),
+    }
+
+
 async def fetch_ndvi(lat: float, lon: float) -> Optional[dict]:
     """Fetch NDVI data from Earth Engine, returning None on failure."""
     if not EE_INITIALIZED:
@@ -769,6 +1248,19 @@ async def fetch_ndvi(lat: float, lon: float) -> Optional[dict]:
     except Exception as e:
         log.error(f"NDVI fetch failed: {e}", exc_info=True)
         return None
+
+
+async def fetch_ndvi_trajectory(lat: float, lon: float) -> dict:
+    """Fetch NDVI trajectory data from Earth Engine. Returns empty dict on failure."""
+    if not EE_INITIALIZED:
+        return {}
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(_ee_executor, _compute_ndvi_trajectory, lat, lon)
+        return result
+    except Exception as e:
+        log.warning(f"NDVI trajectory fetch failed: {e}")
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -892,10 +1384,11 @@ async def _run_advisory(req: AdvisoryRequest):
             crop = "Tomato"
         log.info(f"Auto-detected crop: {crop}")
 
-    # 1. Geocode + weather + NDVI in PARALLEL (all only need lat/lon)
+    # 1. Geocode + weather + NDVI + KVK in PARALLEL
     location_task = asyncio.create_task(reverse_geocode(req.latitude, req.longitude))
     weather_task = asyncio.create_task(fetch_weather(req.latitude, req.longitude))
     ndvi_task = asyncio.create_task(fetch_ndvi(req.latitude, req.longitude))
+    kvk_task = asyncio.create_task(find_nearest_kvk(req.latitude, req.longitude))
 
     location = await location_task
     log.info(f"Location: {location}")
@@ -904,13 +1397,14 @@ async def _run_advisory(req: AdvisoryRequest):
     mandis = await fetch_mandi_prices(crop, location["state"])
     log.info(f"Found {len(mandis)} mandis with prices")
 
-    # 3. Distances + weather in PARALLEL. NDVI is best-effort (don't block on it).
+    # 3. Distances + weather in PARALLEL
     distances_task = asyncio.create_task(get_distances(req.latitude, req.longitude, mandis))
     weather = await weather_task
     mandis = await distances_task
 
-    # Try to get NDVI if it's already done, otherwise don't wait more than 3s
+    # 4. NDVI — best-effort with timeout
     ndvi_data = None
+    ndvi_trajectory = {}
     try:
         ndvi_data = await asyncio.wait_for(ndvi_task, timeout=3.0)
         if ndvi_data:
@@ -918,10 +1412,35 @@ async def _run_advisory(req: AdvisoryRequest):
     except (asyncio.TimeoutError, Exception):
         log.info("NDVI skipped (slow/unavailable) — proceeding without satellite data")
 
-    # 4. Calculate net profits (pure computation, instant)
-    mandis = calculate_net_profits(mandis)
+    # NDVI trajectory — best-effort, don't block
+    if ndvi_data:
+        try:
+            ndvi_trajectory = await asyncio.wait_for(
+                fetch_ndvi_trajectory(req.latitude, req.longitude), timeout=5.0
+            )
+        except (asyncio.TimeoutError, Exception):
+            log.info("NDVI trajectory skipped — using basic NDVI only")
 
-    # 5. Find best mandi and local/closest mandi
+    # 4a. Calculate net profits with spoilage
+    mandis = calculate_net_profits(mandis, crop=crop)
+
+    # 4b. Analyze price trend
+    price_trend = analyze_price_trend(mandis)
+    log.info(f"Price trend: {price_trend['trend']} ({price_trend['trend_percent']}%)")
+
+    # 4c. Estimate growth stage
+    growth_stage = estimate_growth_stage(crop, weather)
+    log.info(f"Growth stage: {growth_stage['stage']}")
+
+    # 4d. Compute confidence scores
+    confidence = compute_advisory_confidence(ndvi_data, ndvi_trajectory, weather, price_trend, mandis)
+    log.info(f"Advisory confidence: {confidence['overall']['level']} ({confidence['overall']['score']})")
+
+    # 5. Get nearest KVK
+    nearest_kvk = await kvk_task
+    log.info(f"Nearest KVK: {nearest_kvk['name']} ({nearest_kvk.get('distance_km', '?')} km)")
+
+    # 6. Find best mandi and local/closest mandi
     mandis_with_profit = [m for m in mandis if m.get("net_profit_per_quintal") is not None]
     if mandis_with_profit:
         best_mandi = max(mandis_with_profit, key=lambda m: m["net_profit_per_quintal"])
@@ -930,7 +1449,7 @@ async def _run_advisory(req: AdvisoryRequest):
         best_mandi = max(mandis, key=lambda m: m["modal_price"])
         local_mandi = mandis[0] if mandis else None
 
-    # 6. Generate advisory via Gemini
+    # 7. Generate advisory via Gemini with all pre-computed data
     advisory_text = await generate_advisory_with_gemini(
         language=req.language,
         location_name=location["location_name"],
@@ -941,6 +1460,12 @@ async def _run_advisory(req: AdvisoryRequest):
         local_mandi=local_mandi,
         weather=weather,
         ndvi_data=ndvi_data,
+        ndvi_trajectory=ndvi_trajectory,
+        growth_stage=growth_stage,
+        price_trend=price_trend,
+        confidence=confidence,
+        nearest_kvk=nearest_kvk,
+        quantity_quintals=req.quantity_quintals,
     )
 
     response_data = {
@@ -952,21 +1477,28 @@ async def _run_advisory(req: AdvisoryRequest):
         "best_mandi": best_mandi,
         "local_mandi": local_mandi,
         "weather": weather,
+        "price_trend": price_trend,
+        "growth_stage": growth_stage,
+        "confidence": confidence,
+        "nearest_kvk": nearest_kvk,
         "advisory": advisory_text,
         "sources": {
             "mandi_prices": "AgMarkNet / data.gov.in (real-time)",
             "distances": "Google Maps Distance Matrix API",
             "weather": "Open-Meteo API",
-            "advisory": "Gemini 2.5 Flash",
+            "advisory": "Gemini 3.1 Flash",
             "geocoding": "Google Maps Geocoding API",
+            "nearest_kvk": "Google Places API",
         },
     }
 
     if ndvi_data:
         response_data["satellite"] = ndvi_data
+        response_data["ndvi_trajectory"] = ndvi_trajectory if ndvi_trajectory else None
         response_data["sources"]["satellite"] = f"Sentinel-2 via Google Earth Engine (project: {EE_PROJECT})"
     else:
         response_data["satellite"] = None
+        response_data["ndvi_trajectory"] = None
         response_data["sources"]["satellite"] = "unavailable"
 
     return response_data
@@ -1122,40 +1654,144 @@ Return ONLY valid JSON (no markdown, no explanation):
 
 
 # ---------------------------------------------------------------------------
-# Twilio Voice Webhooks — Phone call integration
-# A farmer calls the Twilio number → Twilio hits these webhooks
+# Twilio Voice — Call session memory + returning caller cache
 # ---------------------------------------------------------------------------
-TWILIO_WELCOME = {
-    "hi": "नमस्ते! किसानमाइंड में आपका स्वागत है। अपनी भाषा में बोलिए — आप कौनसी फसल उगा रहे हैं और कहाँ?",
-    "en": "Welcome to KisanMind! Tell me which crop you're growing and your location.",
-    "ta": "கிசான்மைண்டிற்கு வரவேற்கிறோம்! நீங்கள் எந்தப் பயிரை பயிரிடுகிறீர்கள், எங்கே?",
-    "te": "కిసాన్‌మైండ్‌కు స్వాగతం! మీరు ఏ పంట పండిస్తున్నారు, ఎక్కడ?",
-    "bn": "কিসানমাইন্ডে স্বাগতম! আপনি কোন ফসল চাষ করছেন এবং কোথায়?",
+# In-memory call session (active call context)
+_call_sessions: dict[str, dict] = {}  # {phone_number: {crop, lat, lon, state, language, last_advisory, last_advisory_data, timestamp}}
+_CALL_SESSION_TTL = 7 * 24 * 60 * 60  # 7 days for returning caller recognition
+
+TWILIO_WELCOME_NEW = {
+    "hi": "नमस्ते भाई! मैं किसानमाइंड हूँ, आपका खेती का साथी। बताइए, कौनसी फसल लगाई है और कहाँ हैं आप?",
+    "en": "Hello friend! I'm KisanMind, your farming companion. Tell me, what crop are you growing and where are you?",
+    "ta": "வணக்கம் நண்பா! நான் கிசான்மைண்ட், உங்கள் விவசாய தோழன். என்ன பயிர் போட்டிருக்கீங்க, எங்கே இருக்கீங்க?",
+    "te": "నమస్కారం అన్నా! నేను కిసాన్‌మైండ్, మీ వ్యవసాయ నేస్తం. ఏం పంట వేశారు, ఎక్కడ ఉన్నారు?",
+    "bn": "নমস্কার ভাই! আমি কিসানমাইন্ড, আপনার চাষের সাথী। বলুন, কী ফসল করেছেন আর কোথায় আছেন?",
+}
+
+TWILIO_WELCOME_RETURNING = {
+    "hi": "नमस्ते भाई! आपने पिछली बार {crop} के बारे में पूछा था {location} से। आज का update सुनना है या कोई नया सवाल?",
+    "en": "Hello again! Last time you asked about {crop} from {location}. Want today's update or a new question?",
+}
+
+TWILIO_FOLLOWUP = {
+    "hi": "और कोई सवाल? मौसम, कोई और मंडी, या कुछ और — बोलिए भाई, मैं सुन रहा हूँ।",
+    "en": "Any other question? Weather, another mandi, or anything else — go ahead, I'm listening.",
+}
+
+TWILIO_GOODBYE = {
+    "hi": "अच्छा भाई, ध्यान रखिए! कल फिर कॉल कर लेना। जय जवान जय किसान!",
+    "en": "Take care friend! Call again tomorrow. Jai Jawaan Jai Kisaan!",
+}
+
+TWILIO_RETRY = {
+    "hi": "एक बार और बोलिए भाई, नेटवर्क थोड़ा कमज़ोर है।",
+    "en": "Please say that again, the network is a bit weak.",
 }
 
 BASE_URL = os.getenv("BASE_URL", "https://kisanmind-api-409924770511.asia-south1.run.app")
 
 
+async def _send_sms_summary(to_number: str, advisory_data: dict, language: str = "hi"):
+    """Send SMS summary of advisory to farmer after voice call. Fire-and-forget."""
+    twilio_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    twilio_auth = os.getenv("TWILIO_AUTH_TOKEN", "")
+    twilio_from = os.getenv("TWILIO_PHONE_NUMBER", "")
+
+    if not all([twilio_sid, twilio_auth, twilio_from, to_number]):
+        log.info("SMS skipped — Twilio credentials not configured")
+        return
+
+    try:
+        location = advisory_data.get("location", {})
+        best = advisory_data.get("best_mandi", {})
+        local = advisory_data.get("local_mandi", {})
+        weather = advisory_data.get("weather", {})
+        kvk = advisory_data.get("nearest_kvk", {})
+        crop = advisory_data.get("crop", "")
+
+        # Rain warning
+        rain_note = ""
+        for d in weather.get("daily_forecast", [])[:3]:
+            if (d.get("precipitation_mm") or 0) > 5:
+                rain_note = f"Rain: {d['date']} ({d['precipitation_mm']}mm)\n"
+                break
+        if not rain_note:
+            rain_note = "No rain 3 days\n"
+
+        sms_body = (
+            f"KisanMind\n"
+            f"{crop}, {location.get('location_name', '')}\n"
+            f"Best: {best.get('market', '?')} Rs{best.get('modal_price', '?')}/q ({best.get('distance_km', '?')}km)\n"
+            f"Local: {local.get('market', '?') if local else '?'} Rs{local.get('modal_price', '?') if local else '?'}/q\n"
+            f"{rain_note}"
+            f"KVK: {kvk.get('name', 'KVK') if kvk else 'KVK'} {kvk.get('distance_km', '?') if kvk else '?'}km\n"
+            f"Helpline: 1800-180-1551"
+        )
+
+        # Translate SMS if not Hindi/English (SMS supports Unicode)
+        if language not in ("hi", "en"):
+            try:
+                translate_client = translate.Client()
+                result = translate_client.translate(sms_body, target_language=language, source_language="en")
+                import html
+                sms_body = html.unescape(result["translatedText"])
+            except Exception:
+                pass  # Keep English if translation fails
+
+        # Send via Twilio REST API
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{twilio_sid}/Messages.json"
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                url,
+                auth=(twilio_sid, twilio_auth),
+                data={"From": twilio_from, "To": to_number, "Body": sms_body},
+            )
+            if resp.status_code in (200, 201):
+                log.info(f"SMS sent to {to_number}")
+            else:
+                log.warning(f"SMS failed: {resp.status_code} {resp.text}")
+
+    except Exception as e:
+        log.warning(f"SMS sending failed: {e}")
+
+
 @app.post("/api/voice/incoming")
 async def twilio_incoming_call(request: Request):
-    """Twilio webhook: farmer calls the number. Greet and gather speech."""
+    """Twilio webhook: farmer calls. Check if returning caller, greet warmly."""
     form = await request.form()
     caller = form.get("From", "unknown")
     log.info(f"Incoming call from {caller}")
 
+    # Check if returning caller
+    session = _call_sessions.get(caller)
+    is_returning = session and (_time.time() - session.get("timestamp", 0)) < _CALL_SESSION_TTL
+
+    if is_returning:
+        crop = session.get("crop", "")
+        location = session.get("location_name", "")
+        lang = session.get("language", "hi")
+        greeting_template = TWILIO_WELCOME_RETURNING.get(lang, TWILIO_WELCOME_RETURNING["hi"])
+        greeting = greeting_template.format(crop=crop, location=location)
+        locale = LANGUAGE_TO_LOCALE.get(lang, "hi-IN")
+    else:
+        greeting = TWILIO_WELCOME_NEW["hi"]
+        locale = "hi-IN"
+
+    safe_greeting = greeting.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Aditi" language="hi-IN">
-        {TWILIO_WELCOME["hi"]}
+    <Say voice="Polly.Aditi" language="{locale}">
+        {safe_greeting}
     </Say>
-    <Gather input="speech" language="hi-IN" speechTimeout="3" timeout="10"
+    <Gather input="speech" language="{locale}" speechTimeout="4" timeout="12"
             action="{BASE_URL}/api/voice/process" method="POST">
-        <Say voice="Polly.Aditi" language="hi-IN">
-            बोलिए, मैं सुन रही हूँ।
+        <Say voice="Polly.Aditi" language="{locale}">
+            {"बोलिए भाई, मैं सुन रहा हूँ।" if locale == "hi-IN" else "Go ahead, I am listening."}
         </Say>
     </Gather>
-    <Say voice="Polly.Aditi" language="hi-IN">
-        कोई बात नहीं, फिर से कॉल करें। धन्यवाद!
+    <Say voice="Polly.Aditi" language="{locale}">
+        {TWILIO_GOODBYE.get("hi" if locale == "hi-IN" else "en", TWILIO_GOODBYE["hi"])}
     </Say>
 </Response>"""
     return Response(content=twiml, media_type="application/xml")
@@ -1163,27 +1799,44 @@ async def twilio_incoming_call(request: Request):
 
 @app.post("/api/voice/process")
 async def twilio_process_speech(request: Request):
-    """Twilio webhook: process the farmer's speech and respond with advisory."""
+    """Twilio webhook: process farmer speech, retain context for follow-ups."""
     form = await request.form()
     speech_result = form.get("SpeechResult", "")
     caller = form.get("From", "unknown")
     log.info(f"Speech from {caller}: {speech_result}")
 
     if not speech_result:
-        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+        safe_retry = TWILIO_RETRY["hi"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Aditi" language="hi-IN">
-        मुझे समझ नहीं आया। कृपया दोबारा बोलें।
+        {safe_retry}
     </Say>
-    <Redirect method="POST">{base}/api/voice/incoming</Redirect>
-</Response>""".replace("{base}", BASE_URL)
+    <Gather input="speech" language="hi-IN" speechTimeout="4" timeout="12"
+            action="{BASE_URL}/api/voice/process" method="POST">
+        <Say voice="Polly.Aditi" language="hi-IN">
+            बोलिए भाई।
+        </Say>
+    </Gather>
+    <Say voice="Polly.Aditi" language="hi-IN">
+        {TWILIO_GOODBYE["hi"]}
+    </Say>
+</Response>"""
         return Response(content=twiml, media_type="application/xml")
 
     try:
-        # Extract intent from speech using Gemini
-        intent_prompt = f"""Extract crop and location from this Indian farmer's speech:
-"{speech_result}"
-Return JSON only: {{"crop": "<crop in English>", "location": "<location name>", "language": "hi"}}"""
+        # Get existing session context
+        session = _call_sessions.get(caller, {})
+
+        # Extract intent from speech using Gemini with dialect awareness
+        intent_prompt = f"""Extract crop, location, and intent from this Indian farmer's speech. The farmer may be speaking Hindi, Tamil, Telugu, Bengali, or English.
+Understand dialects: tamatar/tamaatar=tomato, gehun=wheat, chawal=rice, aloo=potato, pyaz=onion, gobhi=cauliflower.
+Previous context: crop={session.get('crop', 'unknown')}, location={session.get('location_name', 'unknown')}
+
+Speech: "{speech_result}"
+
+Return JSON only:
+{{"crop": "<crop in English or null if not mentioned>", "location": "<location name or null>", "intent": "<full_advisory|weather_check|price_check|kvk_info|daily_action|repeat>", "language": "<detected 2-letter code: hi/en/ta/te/bn/mr/gu/kn/ml/pa>", "quantity_quintals": <number or 0 if not mentioned>}}"""
 
         intent_resp = gemini_client.models.generate_content(
             model="gemini-3-flash-preview", contents=intent_prompt
@@ -1193,44 +1846,67 @@ Return JSON only: {{"crop": "<crop in English>", "location": "<location name>", 
             intent_text = intent_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         intent_data = json.loads(intent_text)
 
-        crop = intent_data.get("crop", "Tomato")
-        location_name = intent_data.get("location", "")
+        # Merge with session context (retain previous crop/location if not mentioned)
+        crop = intent_data.get("crop") or session.get("crop", "Tomato")
+        location_name = intent_data.get("location") or session.get("location_name", "")
+        detected_lang = intent_data.get("language", "hi")
+        quantity = intent_data.get("quantity_quintals", 0)
+        locale = LANGUAGE_TO_LOCALE.get(detected_lang, "hi-IN")
 
-        # Geocode the location
-        geo = await reverse_geocode_by_name(location_name) if location_name else {"latitude": 28.6139, "longitude": 77.2090}
+        # Geocode location
+        if location_name and not session.get("lat"):
+            geo = await reverse_geocode_by_name(location_name)
+        elif session.get("lat"):
+            geo = {"latitude": session["lat"], "longitude": session["lon"]}
+        else:
+            geo = {"latitude": 28.6139, "longitude": 77.2090}
 
-        # Get advisory
+        # Run advisory
         req = AdvisoryRequest(
             latitude=geo.get("latitude", 28.6139),
             longitude=geo.get("longitude", 77.2090),
             crop=crop,
-            language="hi",
+            language=detected_lang,
             intent="full_advisory",
+            quantity_quintals=quantity,
         )
         result = await _run_advisory(req)
         advisory_text = result["advisory"]
 
-        # Respond with the advisory
-        # Escape XML special characters
+        # Save session for follow-ups and returning caller
+        _call_sessions[caller] = {
+            "crop": crop,
+            "lat": geo.get("latitude"),
+            "lon": geo.get("longitude"),
+            "location_name": location_name or result.get("location", {}).get("location_name", ""),
+            "state": result.get("location", {}).get("state", ""),
+            "language": detected_lang,
+            "last_advisory": advisory_text,
+            "last_advisory_data": result,
+            "timestamp": _time.time(),
+        }
+
+        # Send SMS summary (fire-and-forget)
+        asyncio.create_task(_send_sms_summary(caller, result, detected_lang))
+
         safe_text = advisory_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe_followup = TWILIO_FOLLOWUP.get(detected_lang, TWILIO_FOLLOWUP["hi"]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe_goodbye = TWILIO_GOODBYE.get(detected_lang, TWILIO_GOODBYE["hi"]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Aditi" language="hi-IN">
+    <Say voice="Polly.Aditi" language="{locale}">
         {safe_text}
     </Say>
     <Pause length="1"/>
-    <Say voice="Polly.Aditi" language="hi-IN">
-        क्या आप कुछ और जानना चाहते हैं?
-    </Say>
-    <Gather input="speech" language="hi-IN" speechTimeout="3" timeout="8"
+    <Gather input="speech" language="{locale}" speechTimeout="4" timeout="10"
             action="{BASE_URL}/api/voice/process" method="POST">
-        <Say voice="Polly.Aditi" language="hi-IN">
-            बोलिए।
+        <Say voice="Polly.Aditi" language="{locale}">
+            {safe_followup}
         </Say>
     </Gather>
-    <Say voice="Polly.Aditi" language="hi-IN">
-        धन्यवाद! किसानमाइंड का उपयोग करने के लिए शुक्रिया। नमस्ते!
+    <Say voice="Polly.Aditi" language="{locale}">
+        {safe_goodbye}
     </Say>
 </Response>"""
         return Response(content=twiml, media_type="application/xml")
@@ -1240,7 +1916,7 @@ Return JSON only: {{"crop": "<crop in English>", "location": "<location name>", 
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Aditi" language="hi-IN">
-        माफ कीजिए, कुछ तकनीकी समस्या आ गई। कृपया थोड़ी देर बाद फिर से कॉल करें।
+        भाई माफ कीजिए, थोड़ी तकनीकी दिक्कत आ गई। एक बार फिर से कॉल कर लीजिए।
     </Say>
 </Response>"""
         return Response(content=twiml, media_type="application/xml")
