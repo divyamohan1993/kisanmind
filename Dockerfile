@@ -29,10 +29,11 @@ COPY cloud_functions/ ./cloud_functions/
 COPY data/ ./data/
 COPY scripts/ ./scripts/
 
-# Copy compiled frontend
+# Copy compiled frontend (standalone + static assets)
 COPY --from=frontend-builder /app/frontend/.next ./frontend/.next
 COPY --from=frontend-builder /app/frontend/public ./frontend/public
 COPY --from=frontend-builder /app/frontend/package*.json ./frontend/
+COPY --from=frontend-builder /app/frontend/next.config.ts ./frontend/
 COPY --from=frontend-builder /app/frontend/node_modules ./frontend/node_modules
 
 # Copy entrypoint
