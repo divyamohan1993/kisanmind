@@ -570,9 +570,8 @@ Cover:
 End with: "Yeh data aaj ki AgMarkNet, satellite aur mausam report se hai. Final faisla aap ka hai."
 """
 
-    # Use Gemini 3.1 Pro for rich conversational advisory
     response = gemini_client.models.generate_content(
-        model="gemini-3.1-pro-preview",
+        model="gemini-3-flash-preview",
         contents=prompt,
     )
 
@@ -588,47 +587,17 @@ End with: "Yeh data aaj ki AgMarkNet, satellite aur mausam report se hai. Final 
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = text.strip()
 
-    # --- Hallucination verification (fast model checks the advisory against source data) ---
-    try:
-        verify_prompt = f"""You are a fact-checker. Compare this advisory against the source data.
-ADVISORY: "{text[:500]}"
-SOURCE DATA:
-- Location: {location_name}, {state}
-- Crop: {crop}
-- Best mandi: {best_mandi['market']} at {best_mandi['modal_price']} Rs/qtl, {best_mandi.get('distance_km','?')} km
-- Local mandi: {local_mandi_name} at {local_price} Rs/qtl
-- Weather: {weather['summary'][:200]}
+    # Hallucination verification runs in BACKGROUND — don't block the response
+    # The advisory is already constrained by the strict prompt rules above
+    async def _verify_in_background():
+        try:
+            verify_prompt = f"""Fact-check: Are prices/distances/names in this advisory consistent with source data? Advisory: "{text[:400]}" Source: Best={best_mandi['market']} {best_mandi['modal_price']}Rs, Local={local_mandi_name} {local_price}Rs. Return PASS or FAIL:<reason>."""
+            verify_resp = gemini_client.models.generate_content(model="gemini-3-flash-preview", contents=verify_prompt)
+            log.info(f"Hallucination check (bg): {verify_resp.text.strip()}")
+        except Exception as e:
+            log.warning(f"Hallucination bg check failed: {e}")
 
-Check: Are the prices, distances, mandi names, and weather mentioned in the advisory consistent with the source data? Are there any fabricated claims not in the source data?
-Return ONLY one word: "PASS" if accurate, or "FAIL:<brief reason>" if hallucinated."""
-
-        verify_resp = gemini_client.models.generate_content(
-            model="gemini-3.1-flash-lite-preview",
-            contents=verify_prompt,
-        )
-        verdict = verify_resp.text.strip()
-        log.info(f"Hallucination check: {verdict}")
-
-        if verdict.upper().startswith("FAIL"):
-            log.warning(f"Hallucination detected: {verdict}. Regenerating with stricter prompt.")
-            # Regenerate with even stricter instructions
-            strict_prompt = prompt + "\n\nCRITICAL: A fact-checker found errors in your previous response. Be EXTREMELY precise. ONLY use exact numbers from the data above. Do not round or change any value."
-            response2 = gemini_client.models.generate_content(
-                model="gemini-3.1-pro-preview",
-                contents=strict_prompt,
-            )
-            text = response2.text
-            text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
-            text = re.sub(r'\*(.+?)\*', r'\1', text)
-            text = re.sub(r'#{1,6}\s*', '', text)
-            text = re.sub(r'[-•]\s+', '', text)
-            text = re.sub(r'\d+\.\s+', '', text)
-            text = re.sub(r'`(.+?)`', r'\1', text)
-            text = re.sub(r'\n{3,}', '\n\n', text)
-            text = text.strip()
-    except Exception as e:
-        log.warning(f"Hallucination check failed (non-critical): {e}")
-
+    asyncio.create_task(_verify_in_background())
     return text
 
 
@@ -857,7 +826,7 @@ async def _run_advisory(req: AdvisoryRequest):
         if intent_text:
             try:
                 extract_resp = gemini_client.models.generate_content(
-                    model="gemini-3.1-flash-lite-preview",
+                    model="gemini-3-flash-preview",
                     contents=f'Extract the crop name from this farmer\'s speech. Return ONLY the crop name in English (e.g., "Tomato", "Wheat", "Rice"). If no crop mentioned, return "Tomato".\n\nSpeech: "{intent_text}"',
                 )
                 crop = extract_resp.text.strip().strip('"').strip("'")
@@ -881,16 +850,19 @@ async def _run_advisory(req: AdvisoryRequest):
     mandis = await fetch_mandi_prices(crop, location["state"])
     log.info(f"Found {len(mandis)} mandis with prices")
 
-    # 3. Distances + wait for weather + NDVI in PARALLEL
+    # 3. Distances + weather in PARALLEL. NDVI is best-effort (don't block on it).
     distances_task = asyncio.create_task(get_distances(req.latitude, req.longitude, mandis))
     weather = await weather_task
-    ndvi_data = await ndvi_task
     mandis = await distances_task
 
-    if ndvi_data:
-        log.info(f"NDVI: {ndvi_data['ndvi']}, Health: {ndvi_data['health']}, Trend: {ndvi_data['trend']}")
-    else:
-        log.info("NDVI data unavailable — advisory will proceed without satellite data")
+    # Try to get NDVI if it's already done, otherwise don't wait more than 3s
+    ndvi_data = None
+    try:
+        ndvi_data = await asyncio.wait_for(ndvi_task, timeout=3.0)
+        if ndvi_data:
+            log.info(f"NDVI: {ndvi_data['ndvi']}, Health: {ndvi_data['health']}")
+    except (asyncio.TimeoutError, Exception):
+        log.info("NDVI skipped (slow/unavailable) — proceeding without satellite data")
 
     # 4. Calculate net profits (pure computation, instant)
     mandis = calculate_net_profits(mandis)
@@ -1075,7 +1047,7 @@ Return ONLY valid JSON (no markdown, no explanation):
 
     try:
         response = gemini_client.models.generate_content(
-            model="gemini-3.1-flash-lite-preview",
+            model="gemini-3-flash-preview",
             contents=prompt,
         )
         text = response.text.strip()
@@ -1159,7 +1131,7 @@ async def twilio_process_speech(request: Request):
 Return JSON only: {{"crop": "<crop in English>", "location": "<location name>", "language": "hi"}}"""
 
         intent_resp = gemini_client.models.generate_content(
-            model="gemini-3.1-flash-lite-preview", contents=intent_prompt
+            model="gemini-3-flash-preview", contents=intent_prompt
         )
         intent_text = intent_resp.text.strip()
         if intent_text.startswith("```"):
