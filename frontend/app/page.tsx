@@ -59,6 +59,7 @@ export default function TalkPage() {
   const sessionIdRef = useRef("");
   const silenceCountRef = useRef(0);
   const advisoryDeliveredRef = useRef(false);
+  const [callSummary, setCallSummary] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
   const geo = useGeolocation();
   const geoRef = useRef(geo);
@@ -137,7 +138,7 @@ export default function TalkPage() {
             for (const fact of (td.trivia || [])) {
               if (triviaDone || !callActiveRef.current) break;
               setCallState("speaking"); addMsg("kisanmind", fact, "status", fact);
-              const fa = await playTTS(fact, lang()); await waitForAudioEnd(fa);
+              const fa = await playTTS(fact, lang()); currentAudioRef.current = fa; await waitForAudioEnd(fa);
             }
           } catch {}
         })();
@@ -146,6 +147,8 @@ export default function TalkPage() {
       try {
         const cr = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: transcript, language: lang(), latitude: lat(), longitude: lon() }) });
         triviaDone = true; const cd = await cr.json();
+        // Stop any filler/trivia audio before playing the real response
+        if (currentAudioRef.current) { currentAudioRef.current.pause(); currentAudioRef.current.currentTime = 0; currentAudioRef.current = null; }
         setCallState("speaking");
         const clean = stripMarkdown(cd.response); const cleanEn = stripMarkdown(cd.response_en || cd.response);
         const kind = cd.has_advisory ? "advisory" : "conversation";
@@ -153,7 +156,7 @@ export default function TalkPage() {
         addMsg("kisanmind", clean, kind, cleanEn);
         if (cd.has_advisory) { try { const b = await fetch(`${API_BASE}/api/beep`); if (b.ok) { const bd = await b.json(); const beep = new Audio(`data:audio/wav;base64,${bd.audio_base64}`); await beep.play(); await waitForAudioEnd(beep); } } catch {} }
         const ra = await playTTS(clean, lang()); currentAudioRef.current = ra; await waitForAudioEnd(ra);
-        if (cd.call_complete || cd.has_advisory) { callActiveRef.current = false; setCallState("ended"); return; }
+        if (cd.call_complete) { callActiveRef.current = false; setCallState("ended"); return; }
       } catch { triviaDone = true; addMsg("kisanmind", "Technical issue.", "status", "Technical issue."); }
     }
   }, [listenOnce, addMsg]);
@@ -208,6 +211,18 @@ export default function TalkPage() {
     callActiveRef.current = false; currentAudioRef.current?.pause(); currentAudioRef.current = null;
     setCallState("ended"); setLiveText("");
   }, []);
+
+  // Generate summary when call ends
+  useEffect(() => {
+    if (callState !== "ended" || messages.length === 0) return;
+    const advisories = messages.filter(m => m.kind === "advisory");
+    if (advisories.length === 0) { setCallSummary(""); return; }
+    const fullText = advisories.map(m => m.text_en).join("\n");
+    setCallSummary("...");
+    fetch(`${API_BASE}/api/summarize`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: fullText, language: languageRef.current }) })
+      .then(r => r.json()).then(d => setCallSummary(d.summary || "")).catch(() => setCallSummary(""));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callState]);
 
   const isInCall = !["pre-call", "ended"].includes(callState);
   const advisoryMsgs = messages.filter(m => m.kind === "advisory");
@@ -389,12 +404,14 @@ export default function TalkPage() {
                 {farmerMsgs.length > 0 && (
                   <p className="text-xs text-gray-500 mb-2"><strong>You:</strong> {farmerMsgs.map(m => m.text).join(" | ")}</p>
                 )}
-                <div className="text-sm text-gray-800 leading-relaxed mb-3">
-                  {advisoryMsgs[advisoryMsgs.length - 1].text}
+                <div className="text-sm text-gray-800 leading-relaxed mb-3 whitespace-pre-line">
+                  {callSummary === "..." ? (
+                    <span className="text-gray-400 italic">Generating summary...</span>
+                  ) : callSummary || advisoryMsgs[advisoryMsgs.length - 1].text}
                 </div>
                 <p className="text-[10px] text-gray-400 text-center">KisanMind · {new Date().toLocaleDateString()} · KVK Helpline: 1800-180-1551</p>
                 <div className="text-center mt-4">
-                  <button onClick={() => { setCallState("pre-call"); setMessages([]); }}
+                  <button onClick={() => { setCallState("pre-call"); setMessages([]); setCallSummary(""); }}
                     className="inline-flex items-center gap-2 px-6 py-2 rounded-lg bg-[#138808] text-white text-sm font-medium hover:bg-[#0f6d06]">
                     <Phone size={16} /> New Call
                   </button>

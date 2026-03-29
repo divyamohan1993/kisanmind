@@ -3162,6 +3162,37 @@ async def text_chat(req: ChatRequest):
 
 
 # ---------------------------------------------------------------------------
+# Summarize — extract key points from advisory for call summary
+# ---------------------------------------------------------------------------
+class SummarizeRequest(BaseModel):
+    text: str
+    language: str = "hi"
+
+@app.post("/api/summarize")
+async def summarize_advisory(req: SummarizeRequest):
+    """Extract 3-5 bullet key points from advisory using Gemini."""
+    try:
+        prompt = (
+            "You are summarizing a farming advisory for an Indian farmer. "
+            "Extract ONLY the 3-5 most actionable key points as short bullet lines. "
+            "Include: crop health status, best mandi + price, critical weather alert, and one action item. "
+            "Keep each bullet under 15 words. No intro, no closing. "
+            f"Respond in the same language as the input.\n\n"
+            f"Advisory:\n{req.text}"
+        )
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        summary = response.text.strip() if response.text else req.text[:200]
+        return {"summary": summary}
+    except Exception as e:
+        log.warning(f"Summarize failed: {e}")
+        # Fallback: return first 200 chars
+        return {"summary": req.text[:200] + "..."}
+
+
+# ---------------------------------------------------------------------------
 # Twilio Voice — Call session memory + returning caller cache
 # ---------------------------------------------------------------------------
 # In-memory call session (active call context)
