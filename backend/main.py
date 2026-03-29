@@ -148,11 +148,22 @@ async def cache_set(key: str, value: dict):
     # GCS write in background (don't block response)
     asyncio.create_task(_gcs_set(key, value))
 
-# Gemini client
+# Gemini clients — API key (primary) + Vertex AI (fallback, no rate limits with billing)
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+_vertex_client = None
+try:
+    _vertex_client = genai.Client(
+        vertexai=True,
+        project=GOOGLE_CLOUD_PROJECT,
+        location="us-central1",
+    )
+    log.info("Vertex AI client initialized (fallback for rate limits)")
+except Exception as e:
+    log.info(f"Vertex AI client not available: {e}")
 
-# Gemini model with fallback chain — try newer models first, fall back to stable
+# Gemini model with fallback chain — gemini-3-flash primary, wide fallback
 GEMINI_MODELS = [
+    "gemini-3-flash-preview",
     "gemini-2.5-flash",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
@@ -160,8 +171,9 @@ GEMINI_MODELS = [
 ]
 
 def _gemini_generate(contents, config=None):
-    """Call Gemini with model fallback and retry on rate limit (429)."""
+    """Call Gemini with model fallback, retry on 429, and Vertex AI fallback."""
     last_err = None
+    # Try API key client first (all models)
     for model in GEMINI_MODELS:
         for attempt in range(2):  # retry once per model on 429
             try:
@@ -174,17 +186,28 @@ def _gemini_generate(contents, config=None):
                 last_err = e
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                     if attempt == 0:
-                        # Extract retry delay if available, default 5s
                         delay = 5
-                        import re as _re
-                        m = _re.search(r"retry in (\d+)", err_str.lower())
+                        m = re.search(r"retry in (\d+)", err_str.lower())
                         if m:
-                            delay = min(int(m.group(1)), 15)  # cap at 15s
+                            delay = min(int(m.group(1)), 15)
                         log.warning(f"Gemini {model} rate-limited, retrying in {delay}s...")
                         _time.sleep(delay)
                         continue
                 log.warning(f"Gemini {model} failed: {err_str[:200]}, trying next model...")
                 break
+
+    # All API key models exhausted — try Vertex AI (billing-backed, no free-tier limits)
+    if _vertex_client:
+        for model in GEMINI_MODELS[:3]:  # try top 3 models via Vertex
+            try:
+                kwargs = {"model": model, "contents": contents}
+                if config:
+                    kwargs["config"] = config
+                return _vertex_client.models.generate_content(**kwargs)
+            except Exception as e:
+                log.warning(f"Vertex {model} failed: {str(e)[:200]}, trying next...")
+                last_err = e
+
     raise last_err
 
 
