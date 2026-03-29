@@ -147,13 +147,14 @@ async def cache_set(key: str, value: dict):
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Gemini model with fallback — primary model may be overloaded
-GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
-GEMINI_REASONING_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"]
+GEMINI_MODELS = ["gemini-3.0-flash", "gemini-2.5-flash"]
+GEMINI_REASONING_MODELS = ["gemini-3.1-pro", "gemini-3.0-flash"]
 
-def _gemini_generate(contents, config=None):
+def _gemini_generate(contents, config=None, use_pro=False):
     """Call Gemini with model fallback. Tries each model once."""
     last_err = None
-    for model in GEMINI_MODELS:
+    models = GEMINI_REASONING_MODELS if use_pro else GEMINI_MODELS
+    for model in models:
         try:
             kwargs = {"model": model, "contents": contents}
             if config:
@@ -2945,49 +2946,44 @@ Return ONLY valid JSON (no markdown, no explanation):
 # ---------------------------------------------------------------------------
 _text_sessions: dict[str, dict] = {}
 
-CHAT_SYSTEM_PROMPT = """You are KisanMind — a wise, warm farming neighbor who helps Indian farmers.
+CHAT_SYSTEM_PROMPT = """You are KisanMind — a wise farming neighbor who helps Indian farmers.
 
-LANGUAGE: Respond in English only. Translation happens automatically.
+LANGUAGE RULE (CRITICAL):
+- You will be told the farmer's language code (e.g. "hi" = Hindi, "ta" = Tamil, "en" = English).
+- If language is "hi": respond DIRECTLY in simple, natural Hindi (Devanagari script). Use everyday farmer Hindi, not textbook Hindi. DO NOT write in English for Hindi users.
+- If language is "en": respond in simple English.
+- For all other languages: respond in English (system will translate).
+- NEVER use complex/literary Hindi words. Use words a village farmer would use.
 
 FIRST MESSAGE (greeting):
-- ALWAYS mention that you have detected their location. Say: "Namaste! I can see you are calling from [general area]. What crop are you growing?"
-- The system will tell you the farmer's GPS coordinates. Use general area name, not exact coordinates.
+- Mention location detected. For Hindi: "नमस्ते! आप [area] से बात कर रहे हैं। कौन सी फसल उगा रहे हैं?"
+- For English: "Namaste! I can see you are calling from [area]. What crop are you growing?"
 
 CONVERSATION FLOW:
-1. If farmer hasn't said crop → greet with location detected + ask crop
-2. If farmer said crop → ask ONE follow-up with 2-3 things: sowing date, land area, any problems?
+1. No crop yet → greet + ask crop
+2. Crop given → ask ONE short follow-up: when did you sow? how much land? any problem?
 3. After farmer's 2nd message → MUST call fetch_farm_data. No more questions.
 
-INTERPRETING DATA FOR THE FARMER (after fetch_farm_data returns):
-Do NOT just cite numbers. EXPLAIN what they mean for the farmer's crop:
+ADVISORY FORMAT (CRITICAL — keep it SHORT):
+After fetch_farm_data returns, give a CONCISE advisory in 4-5 short sentences max:
 
-Satellite health (NDVI):
-- Score > 0.6 → "Your crop is healthy and growing well — the European Space Agency's Sentinel-2 satellite confirms good green cover"
-- Score 0.4-0.6 → "Your crop health is moderate — Sentinel-2 satellite shows it could be better. Make sure water and nutrients are sufficient"
-- Score < 0.4 → "Warning: Sentinel-2 satellite shows your crop health is poor. Check for disease or nutrient deficiency immediately"
+1. Crop health: "Fasal ki sehat [achhi/thik/kamzor] hai (NDVI [score])" — one line
+2. Soil/water: "Mitti mein [nami hai/sukhi hai]" — one line
+3. Weather: "[Date] ko baarish hogi, usse pehle paani/spray mat dena" — one line
+4. Best mandi: "[Mandi name] mein [price] Rs/quintal, transport ke baad [net] Rs milega" — one line
+5. KVK: "KVK helpline: 1800-180-1551" — one line
 
-Soil moisture (SAR):
-- wet → "Sentinel-1 radar shows your soil has enough moisture — no need to water right now"
-- dry → "Sentinel-1 radar shows your soil is getting dry — plan irrigation soon"
+DO NOT write paragraphs. DO NOT repeat information. DO NOT over-explain satellite technology.
+Keep total response under 100 words.
 
-Weather: "On [specific dates], rain is expected — so don't water or spray before that. After rain, check for fungal issues."
-
-Mandi: "Best price is Rs X/quintal at [mandi name] ([distance] km away). After transport costs, you'll get Rs Y net per quintal."
-If no mandi data available: "Mandi prices for your crop are not in our system today. Check with your local market or call the KVK."
-
-For follow-up questions: Use the SAME data already fetched. Do NOT call fetch_farm_data again unless farmer asks about a DIFFERENT crop.
-
-ALWAYS END ADVISORY WITH:
-1. Nearest KVK: mention the name, distance, and phone number from the data. Say "Visit your nearest KVK for detailed in-person guidance."
-2. Disclaimer: "This advice is based on satellite and radar data and may differ from actual ground conditions. The final decision is always yours."
-3. Ask: "Do you have any other questions?"
+For follow-up questions: Use SAME data. Do NOT call fetch_farm_data again unless different crop.
 
 ENDING THE CALL:
-If farmer says thank you, goodbye, no more questions, bas, dhanyavad, nahi, theek hai, no thank you — respond with:
-"CALL_COMPLETE: Take care! Remember to visit [KVK name] for detailed guidance. Call again anytime. Jai Kisaan!"
-You MUST include the exact text "CALL_COMPLETE:" at the start when ending the call.
+If farmer says thanks/bye/bas/dhanyavad/nahi/theek hai:
+"CALL_COMPLETE: Dhanyavaad! KVK se baat karein: 1800-180-1551. Phir kabhi call karein. Jai Kisaan!"
+You MUST include "CALL_COMPLETE:" at the start when ending.
 
-SAFETY: Never recommend pesticide brands. For pests/disease → refer to KVK helpline 1800-180-1551.
+SAFETY: Never recommend pesticide brands → refer to KVK 1800-180-1551.
 """
 
 
@@ -3010,6 +3006,7 @@ async def text_chat(req: ChatRequest):
 
     has_gps = req.latitude != 0 and req.longitude != 0
     location_note = f"Farmer's GPS: ({req.latitude}, {req.longitude})" if has_gps else "No GPS available."
+    lang_note = f"Farmer's language: {req.language}. Respond accordingly (see LANGUAGE RULE)."
 
     contents = []
     for turn in session["history"]:
@@ -3052,7 +3049,7 @@ async def text_chat(req: ChatRequest):
             lambda: _gemini_generate(
                 contents,
                 config=types.GenerateContentConfig(
-                    system_instruction=CHAT_SYSTEM_PROMPT + f"\n\n{location_note}",
+                    system_instruction=CHAT_SYSTEM_PROMPT + f"\n\n{location_note}\n{lang_note}",
                     tools=[types.Tool(function_declarations=[types.FunctionDeclaration(**fd) for fd in tool_decls])],
                 ),
             ),
@@ -3098,15 +3095,17 @@ async def text_chat(req: ChatRequest):
                         lambda: _gemini_generate(
                             contents2,
                             config=types.GenerateContentConfig(
-                                system_instruction=CHAT_SYSTEM_PROMPT + f"\n\n{location_note}",
+                                system_instruction=CHAT_SYSTEM_PROMPT + f"\n\n{location_note}\n{lang_note}",
                             ),
+                            use_pro=True,
                         ),
                     )
                     response_text = response2.text.strip()
                     session["history"].append({"role": "model", "parts": [{"text": response_text}]})
 
                     display_text = response_text
-                    if req.language != "en":
+                    # Skip translation for Hindi — Gemini already responds in Hindi directly
+                    if req.language not in ("en", "hi"):
                         try:
                             tc = translate.Client()
                             tr = tc.translate(response_text, target_language=req.language, source_language="en")
@@ -3130,7 +3129,8 @@ async def text_chat(req: ChatRequest):
         session["history"].append({"role": "model", "parts": [{"text": response_text}]})
 
         display_text = response_text
-        if req.language != "en":
+        # Skip translation for Hindi — Gemini already responds in Hindi directly
+        if req.language not in ("en", "hi"):
             try:
                 tc = translate.Client()
                 tr = tc.translate(response_text, target_language=req.language, source_language="en")
@@ -3181,7 +3181,7 @@ async def summarize_advisory(req: SummarizeRequest):
             f"Advisory:\n{req.text}"
         )
         response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.0-flash",
             contents=prompt,
         )
         summary = response.text.strip() if response.text else req.text[:200]
