@@ -22,6 +22,24 @@ const LANGUAGES = [
   { code: "brx", label: "বোড়ো" }, { code: "mni", label: "मणिपुरी" },
 ];
 
+/* ---- UI Translations: all interface text in selected language ---- */
+const UI: Record<string, Record<string, string>> = {
+  hi: { callBtn: "किसानमाइंड को कॉल करें", tagline: "150M+ भारतीय किसान | 22 भाषाएं | असली सैटेलाइट + मंडी डेटा", listening: "सुन रहे हैं...", processing: "प्रोसेसिंग...", speaking: "बोल रहे हैं...", continueOrWait: "बोलें या रुकें...", endCall: "कॉल खत्म करें", callEnded: "कॉल समाप्त", newCall: "नई कॉल करें", connecting: "जोड़ रहे हैं...", advisor: "आपका खेती सलाहकार तैयार है", tapStart: "हरे बटन पर टैप करें", callSummary: "कॉल सारांश", bestMandi: "सबसे अच्छी मंडी", weather: "5 दिन का मौसम", dashboard: "डैशबोर्ड", fetchingData: "असली डेटा ला रहे हैं...", adviceReady: "आपकी सलाह तैयार है..." },
+  en: { callBtn: "Call KisanMind", tagline: "150M+ Indian Farmers | 22 Languages | Real Satellite + Mandi Data", listening: "Listening...", processing: "Processing...", speaking: "Speaking...", continueOrWait: "Continue or wait...", endCall: "End call", callEnded: "Call ended", newCall: "New Call", connecting: "Connecting...", advisor: "Your farming advisor is ready", tapStart: "Tap the green button", callSummary: "Call Summary", bestMandi: "Best Mandi", weather: "5-Day Weather", dashboard: "Dashboard", fetchingData: "Getting real data...", adviceReady: "Here's your advice..." },
+  ta: { callBtn: "கிசான்மைண்ட் அழைக்கவும்", tagline: "150M+ விவசாயிகள் | 22 மொழிகள்", listening: "கேட்கிறேன்...", processing: "செயலாக்கம்...", speaking: "பேசுகிறேன்...", continueOrWait: "தொடருங்கள்...", endCall: "அழைப்பு முடிக்க", callEnded: "அழைப்பு முடிந்தது", newCall: "புதிய அழைப்பு", connecting: "இணைக்கிறது...", advisor: "ஆலோசகர் தயார்", tapStart: "பச்சை பட்டனை தட்டுங்கள்", callSummary: "அழைப்பு சுருக்கம்", bestMandi: "சிறந்த மண்டி", weather: "5 நாள் வானிலை", dashboard: "டாஷ்போர்ட்", fetchingData: "உண்மை தரவு...", adviceReady: "ஆலோசனை..." },
+  te: { callBtn: "కిసాన్‌మైండ్ కాల్ చేయండి", tagline: "150M+ రైతులు | 22 భాషలు", listening: "వింటున్నాను...", processing: "ప్రాసెసింగ్...", speaking: "చెప్తున్నాను...", continueOrWait: "కొనసాగించు...", endCall: "కాల్ ముగించు", callEnded: "కాల్ ముగిసింది", newCall: "కొత్త కాల్", connecting: "కనెక్ట్...", advisor: "సలహాదారు సిద్ధం", tapStart: "ఆకుపచ్చ బటన్ నొక్కండి", callSummary: "కాల్ సారాంశం", bestMandi: "ఉత్తమ మండి", weather: "5 రోజుల వాతావరణం", dashboard: "డాష్‌బోర్డ్", fetchingData: "డేటా...", adviceReady: "సలహా..." },
+  bn: { callBtn: "কিষাণমাইন্ড কল করুন", tagline: "150M+ কৃষক | 22 ভাষা", listening: "শুনছি...", processing: "প্রসেসিং...", speaking: "বলছি...", continueOrWait: "বলুন বা অপেক্ষা করুন...", endCall: "কল শেষ", callEnded: "কল শেষ হয়েছে", newCall: "নতুন কল", connecting: "সংযোগ...", advisor: "আপনার কৃষি পরামর্শদাতা প্রস্তুত", tapStart: "সবুজ বোতাম টিপুন", callSummary: "কল সারাংশ", bestMandi: "সেরা মান্ডি", weather: "5 দিনের আবহাওয়া", dashboard: "ড্যাশবোর্ড", fetchingData: "ডেটা আনা হচ্ছে...", adviceReady: "পরামর্শ..." },
+  mr: { callBtn: "किसानमाइंड ला कॉल करा", tagline: "150M+ शेतकरी | 22 भाषा", listening: "ऐकतोय...", processing: "प्रोसेसिंग...", speaking: "बोलतोय...", continueOrWait: "बोला किंवा थांबा...", endCall: "कॉल बंद", callEnded: "कॉल संपली", newCall: "नवीन कॉल", connecting: "जोडतोय...", advisor: "शेती सल्लागार तयार", tapStart: "हिरवे बटण दाबा", callSummary: "कॉल सारांश", bestMandi: "सर्वोत्तम मंडी", weather: "5 दिवस हवामान", dashboard: "डॅशबोर्ड", fetchingData: "डेटा...", adviceReady: "सल्ला..." },
+  pa: { callBtn: "ਕਿਸਾਨਮਾਈਂਡ ਨੂੰ ਕਾਲ ਕਰੋ", tagline: "150M+ ਕਿਸਾਨ | 22 ਭਾਸ਼ਾਵਾਂ", listening: "ਸੁਣ ਰਹੇ ਹਾਂ...", processing: "ਪ੍ਰੋਸੈਸਿੰਗ...", speaking: "ਬੋਲ ਰਹੇ ਹਾਂ...", continueOrWait: "ਬੋਲੋ ਜਾਂ ਰੁਕੋ...", endCall: "ਕਾਲ ਖਤਮ", callEnded: "ਕਾਲ ਖਤਮ ਹੋ ਗਈ", newCall: "ਨਵੀਂ ਕਾਲ", connecting: "ਜੋੜ ਰਹੇ ਹਾਂ...", advisor: "ਸਲਾਹਕਾਰ ਤਿਆਰ ਹੈ", tapStart: "ਹਰਾ ਬਟਨ ਦਬਾਓ", callSummary: "ਕਾਲ ਸਾਰ", bestMandi: "ਸਭ ਤੋਂ ਵਧੀਆ ਮੰਡੀ", weather: "5 ਦਿਨ ਮੌਸਮ", dashboard: "ਡੈਸ਼ਬੋਰਡ", fetchingData: "ਡੇਟਾ...", adviceReady: "ਸਲਾਹ..." },
+  gu: { callBtn: "કિસાનમાઈન્ડ ને કૉલ કરો", tagline: "150M+ ખેડૂતો | 22 ભાષાઓ", listening: "સાંભળી રહ્યા છીએ...", processing: "પ્રોસેસિંગ...", speaking: "બોલી રહ્યા છીએ...", continueOrWait: "બોલો અથવા રાહ જુઓ...", endCall: "કૉલ પૂરો", callEnded: "કૉલ પૂરો થયો", newCall: "નવો કૉલ", connecting: "જોડાઈ રહ્યા છીએ...", advisor: "સલાહકાર તૈયાર", tapStart: "લીલું બટન દબાવો", callSummary: "કૉલ સારાંશ", bestMandi: "શ્રેષ્ઠ મંડી", weather: "5 દિવસ હવામાન", dashboard: "ડૅશબોર્ડ", fetchingData: "ડેટા...", adviceReady: "સલાહ..." },
+  kn: { callBtn: "ಕಿಸಾನ್‌ಮೈಂಡ್ ಕರೆ ಮಾಡಿ", tagline: "150M+ ರೈತರು | 22 ಭಾಷೆಗಳು", listening: "ಕೇಳುತ್ತಿದ್ದೇನೆ...", processing: "ಪ್ರಕ್ರಿಯೆ...", speaking: "ಹೇಳುತ್ತಿದ್ದೇನೆ...", continueOrWait: "ಮುಂದುವರಿಸಿ...", endCall: "ಕರೆ ಮುಗಿಸಿ", callEnded: "ಕರೆ ಮುಗಿಯಿತು", newCall: "ಹೊಸ ಕರೆ", connecting: "ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇವೆ...", advisor: "ಸಲಹೆಗಾರ ಸಿದ್ಧ", tapStart: "ಹಸಿರು ಬಟನ್ ಒತ್ತಿ", callSummary: "ಕರೆ ಸಾರಾಂಶ", bestMandi: "ಅತ್ಯುತ್ತಮ ಮಂಡಿ", weather: "5 ದಿನ ಹವಾಮಾನ", dashboard: "ಡ್ಯಾಶ್‌ಬೋರ್ಡ್", fetchingData: "ಡೇಟಾ...", adviceReady: "ಸಲಹೆ..." },
+  ml: { callBtn: "കിസാൻമൈൻഡ് വിളിക്കുക", tagline: "150M+ കർഷകർ | 22 ഭാഷകൾ", listening: "കേൾക്കുന്നു...", processing: "പ്രോസസ്സിംഗ്...", speaking: "സംസാരിക്കുന്നു...", continueOrWait: "തുടരുക...", endCall: "കോൾ അവസാനിപ്പിക്കുക", callEnded: "കോൾ കഴിഞ്ഞു", newCall: "പുതിയ കോൾ", connecting: "കണക്ട്...", advisor: "ഉപദേഷ്ടാവ് തയ്യാർ", tapStart: "പച്ച ബട്ടൺ അമർത്തുക", callSummary: "കോൾ സംഗ്രഹം", bestMandi: "മികച്ച മണ്ടി", weather: "5 ദിന കാലാവസ്ഥ", dashboard: "ഡാഷ്‌ബോർഡ്", fetchingData: "ഡാറ്റ...", adviceReady: "ഉപദേശം..." },
+};
+
+function t(lang: string, key: string): string {
+  return UI[lang]?.[key] || UI["hi"]?.[key] || UI["en"]?.[key] || key;
+}
+
 // Greetings — GPS handles location automatically, only ask for crop
 function getGreeting(lang: string, hasGps: boolean): string {
   if (hasGps) {
@@ -174,7 +192,7 @@ export default function TalkPage() {
   const listenOnce = useCallback(async (): Promise<string> => {
     if (!callActiveRef.current) return "";
     setCallState("listening");
-    setStatusText(language === "en" ? "Speak..." : "बोलिए...");
+    setStatusText(t(language, "listening"));
     setCountdown(null);
 
     await startMic();
@@ -223,7 +241,7 @@ export default function TalkPage() {
           hasSpokeAtAll = true;
           silenceStart = 0;
           setCountdown(null);
-          setStatusText(language === "en" ? "Listening..." : "सुन रहे हैं...");
+          setStatusText(t(language, "listening"));
         } else if (isSpeaking && !speaking) {
           // Just went silent after speaking
           isSpeaking = false;
@@ -236,7 +254,7 @@ export default function TalkPage() {
           const remaining = Math.ceil(SILENCE_TIMEOUT - silenceSec);
           if (remaining > 0) {
             setCountdown(remaining);
-            setStatusText(language === "en" ? "Continue or wait..." : "बोलें या रुकें...");
+            setStatusText(t(language, "continueOrWait"));
           } else {
             clearInterval(interval);
             resolve("silence");
@@ -261,7 +279,7 @@ export default function TalkPage() {
 
     // STT
     setCallState("processing");
-    setStatusText(language === "en" ? "Processing..." : "प्रोसेसिंग...");
+    setStatusText(t(language, "processing"));
     try {
       const fd = new FormData();
       fd.append("audio", blob, "recording.webm");
@@ -369,7 +387,7 @@ export default function TalkPage() {
     }
 
     // Speak advisory
-    setStatusText(language === "en" ? "Here's your advice..." : "आपकी सलाह तैयार है...");
+    setStatusText(t(language, "adviceReady"));
     addMessage("kisanmind", advisoryText);
     const advAudio = await playTTS(advisoryText, language);
     currentAudioRef.current = advAudio;
@@ -404,7 +422,7 @@ export default function TalkPage() {
 
     // Greeting — adapt based on whether GPS is available
     setCallState("greeting");
-    setStatusText(language === "en" ? "Connecting..." : "जोड़ रहे हैं...");
+    setStatusText(t(language, "connecting"));
     const hasGps = !!(geo.latitude && geo.longitude);
     const greetText = getGreeting(language, hasGps);
     addMessage("kisanmind", greetText);
@@ -431,7 +449,7 @@ export default function TalkPage() {
     releaseMic();
     setCountdown(null);
     setCallState("ended");
-    setStatusText(language === "en" ? "Call ended" : "कॉल समाप्त");
+    setStatusText(t(language, "callEnded"));
   }, [language, releaseMic]);
 
   /* ---- UI state ---- */
@@ -496,8 +514,8 @@ export default function TalkPage() {
         {callState === "pre-call" && (
           <div className="flex flex-col items-center justify-center h-full text-center opacity-50">
             <Leaf size={48} className="mb-4" />
-            <p className="text-lg">{language === "en" ? "Your farming advisor is ready" : "आपका खेती सलाहकार तैयार है"}</p>
-            <p className="text-sm mt-2 text-white/40">{language === "en" ? "Tap the green button to start" : "हरे बटन पर टैप करें"}</p>
+            <p className="text-lg">{t(language, "advisor")}</p>
+            <p className="text-sm mt-2 text-white/40">{t(language, "tapStart")}</p>
           </div>
         )}
 
@@ -534,7 +552,7 @@ export default function TalkPage() {
         {callState === "ended" && summary && (
           <div className="mx-auto max-w-md space-y-4 mt-4">
             <h3 className="text-center text-lg font-bold text-white/80">
-              {language === "en" ? "Call Summary" : "कॉल सारांश"}
+              {t(language, "callSummary")}
             </h3>
 
             {/* Location + crop */}
@@ -555,7 +573,7 @@ export default function TalkPage() {
                   <TrendingUp size={24} className="text-emerald-400 shrink-0" />
                   <div className="flex-1">
                     <div className="text-xs text-emerald-400/70 uppercase tracking-wider">
-                      {language === "en" ? "Best Mandi" : "सबसे अच्छी मंडी"}
+                      {t(language, "bestMandi")}
                     </div>
                     <div className="text-xl font-bold">{summary.bestMandi}</div>
                     {summary.bestPrice && (
@@ -585,7 +603,7 @@ export default function TalkPage() {
                 <div className="flex items-center gap-2 mb-3">
                   <Thermometer size={20} className="text-sky" />
                   <span className="text-xs text-sky/70 uppercase tracking-wider">
-                    {language === "en" ? "5-Day Weather" : "5 दिन का मौसम"}
+                    {t(language, "weather")}
                   </span>
                 </div>
                 <div className="flex gap-2 overflow-x-auto pb-1">
@@ -607,7 +625,7 @@ export default function TalkPage() {
               onClick={() => { setCallState("pre-call"); setSummary(null); setMessages([]); }}
               className="w-full rounded-xl bg-healthy/20 border border-healthy/30 py-4 text-lg font-bold text-healthy hover:bg-healthy/30 transition"
             >
-              {language === "en" ? "New Call" : "नई कॉल करें"}
+              {t(language, "newCall")}
             </button>
           </div>
         )}
@@ -629,7 +647,7 @@ export default function TalkPage() {
               <Phone size={56} className="relative z-10 text-white" />
             </button>
             <p className="mt-4 text-lg font-medium text-white/70">
-              {language === "en" ? "Tap to call KisanMind" : "किसानमाइंड को कॉल करें"}
+              {t(language, "callBtn")}
             </p>
             <p className="mt-2 text-xs text-white/30 tracking-wide text-center max-w-[280px]">
               150M+ Indian Farmers | 22 Languages | Real Satellite + Mandi Data
@@ -667,7 +685,7 @@ export default function TalkPage() {
               <PhoneOff size={32} className="text-white" />
             </button>
             <p className="mt-2 text-xs text-white/40">
-              {language === "en" ? "End call" : "कॉल खत्म करें"}
+              {t(language, "endCall")}
             </p>
           </>
         )}
