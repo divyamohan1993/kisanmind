@@ -151,22 +151,40 @@ async def cache_set(key: str, value: dict):
 # Gemini client
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Gemini model with fallback — primary model may be overloaded
-GEMINI_MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash"]
+# Gemini model with fallback chain — try newer models first, fall back to stable
+GEMINI_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+]
 
 def _gemini_generate(contents, config=None):
-    """Call Gemini with model fallback."""
+    """Call Gemini with model fallback and retry on rate limit (429)."""
     last_err = None
-    models = GEMINI_MODELS
-    for model in models:
-        try:
-            kwargs = {"model": model, "contents": contents}
-            if config:
-                kwargs["config"] = config
-            return gemini_client.models.generate_content(**kwargs)
-        except Exception as e:
-            last_err = e
-            log.warning(f"Gemini {model} failed: {e}, trying next...")
+    for model in GEMINI_MODELS:
+        for attempt in range(2):  # retry once per model on 429
+            try:
+                kwargs = {"model": model, "contents": contents}
+                if config:
+                    kwargs["config"] = config
+                return gemini_client.models.generate_content(**kwargs)
+            except Exception as e:
+                err_str = str(e)
+                last_err = e
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    if attempt == 0:
+                        # Extract retry delay if available, default 5s
+                        delay = 5
+                        import re as _re
+                        m = _re.search(r"retry in (\d+)", err_str.lower())
+                        if m:
+                            delay = min(int(m.group(1)), 15)  # cap at 15s
+                        log.warning(f"Gemini {model} rate-limited, retrying in {delay}s...")
+                        _time.sleep(delay)
+                        continue
+                log.warning(f"Gemini {model} failed: {err_str[:200]}, trying next model...")
+                break
     raise last_err
 
 
@@ -2479,7 +2497,7 @@ async def _run_advisory(req: AdvisoryRequest):
     location_task = asyncio.create_task(reverse_geocode(req.latitude, req.longitude))
     weather_task = asyncio.create_task(fetch_weather(req.latitude, req.longitude))
     kvk_task = asyncio.create_task(find_nearest_kvk(req.latitude, req.longitude))
-    hist_weather_task = asyncio.create_task(fetch_historical_weather(req.latitude, req.longitude, days_back=120))
+    hist_weather_task = asyncio.create_task(fetch_historical_weather(req.latitude, req.longitude, days_back=90))
 
     # Live EE calls only if cache missed
     ndvi_task = None
