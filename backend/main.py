@@ -3148,8 +3148,8 @@ async def text_chat(req: ChatRequest):
         log.exception(f"Chat error: {e}")
         return {
             "session_id": session_id,
-            "response": "Technical issue. Please try again.",
-            "response_en": "Technical issue. Please try again.",
+            "response": "Technical issue. Gemini AI may be overloaded — please try again in a moment.",
+            "response_en": "Technical issue. Gemini AI may be overloaded — please try again in a moment.",
             "has_advisory": False,
             "call_complete": False,
         }

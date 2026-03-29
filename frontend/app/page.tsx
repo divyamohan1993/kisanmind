@@ -139,7 +139,7 @@ export default function TalkPage() {
         if (cd.has_advisory) { try { const b = await fetch(`${API_BASE}/api/beep`); if (b.ok) { const bd = await b.json(); const beep = new Audio(`data:audio/wav;base64,${bd.audio_base64}`); await beep.play(); await waitForAudioEnd(beep); } } catch {} }
         const ra = await playTTS(clean, lang()); currentAudioRef.current = ra; await waitForAudioEnd(ra);
         if (cd.call_complete) { callActiveRef.current = false; setCallState("ended"); return; }
-      } catch { addMsg("kisanmind", "Technical issue.", "status", "Technical issue."); }
+      } catch { addMsg("kisanmind", "Technical issue. Gemini AI may be overloaded — please try again in a moment.", "status", "Technical issue. Gemini AI may be overloaded — please try again in a moment."); }
     }
   }, [listenOnce, addMsg]);
 
