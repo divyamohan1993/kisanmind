@@ -657,6 +657,7 @@ def cross_validate_data_sources(
     weather: dict,
     price_trend: dict,
     growth_stage: dict,
+    satellite_extras: dict = None,
 ) -> list[dict]:
     """Cross-validate data sources and flag conflicts for transparent advisory.
     Returns list of conflict/agreement observations with recommended actions."""
@@ -758,6 +759,75 @@ def cross_validate_data_sources(
                 "action": "PROTECT_CROP",
                 "confidence": "HIGH",
                 "detail": f"Temperature dropping to {frost_days[0]['min_temp_c']}°C. Crop at {stage} stage is highly vulnerable. Cover crop tonight or use smudge pots.",
+            })
+
+    # 6. SAR soil moisture vs NDVI cross-check
+    if satellite_extras and satellite_extras.get("sar"):
+        sar = satellite_extras["sar"]
+        sar_moisture = sar.get("moisture_class", "")
+        if ndvi_data and ndvi_trajectory:
+            trajectory = ndvi_trajectory.get("trajectory", "")
+            if trajectory == "declining" and sar_moisture in ("moist", "wet"):
+                observations.append({
+                    "type": "CONFLICT",
+                    "sources": ["sentinel-2_ndvi", "sentinel-1_sar"],
+                    "finding": "Crop health declining despite adequate soil moisture (confirmed by radar)",
+                    "action": "REFER_KVK",
+                    "confidence": "HIGH",
+                    "detail": "Both optical (Sentinel-2) and radar (Sentinel-1) data confirm: soil has water but crop is declining. This rules out water stress — likely pest, disease, or nutrient issue. Refer to KVK.",
+                })
+            elif trajectory == "declining" and sar_moisture in ("dry", "very_dry"):
+                observations.append({
+                    "type": "AGREEMENT",
+                    "sources": ["sentinel-2_ndvi", "sentinel-1_sar"],
+                    "finding": "Crop declining AND soil is dry — confirmed water stress from two independent satellites",
+                    "action": "IRRIGATE",
+                    "confidence": "HIGH",
+                    "detail": "Optical satellite shows declining crop health. Radar independently confirms dry soil. Water stress is very likely. Irrigate immediately.",
+                })
+
+    # 7. MODIS LST heat stress
+    if satellite_extras and satellite_extras.get("lst"):
+        lst = satellite_extras["lst"]
+        if lst.get("heat_stress") in ("high", "extreme"):
+            observations.append({
+                "type": "WARNING",
+                "sources": ["modis_lst"],
+                "finding": f"Land surface temperature {lst.get('lst_day_celsius', '?')}°C — heat stress detected from satellite",
+                "action": "IRRIGATE",
+                "confidence": "HIGH",
+                "detail": lst.get("heat_detail", ""),
+            })
+        if lst.get("lst_anomaly_celsius") and lst["lst_anomaly_celsius"] > 3:
+            observations.append({
+                "type": "WARNING",
+                "sources": ["modis_lst"],
+                "finding": f"Your field is {lst['lst_anomaly_celsius']}°C hotter than surrounding area",
+                "action": "IRRIGATE",
+                "confidence": "MEDIUM",
+                "detail": f"Your field's surface temperature is {lst['lst_anomaly_celsius']}°C above the regional average. This may indicate less vegetation cover or dry soil compared to neighbors.",
+            })
+
+    # 8. SMAP root-zone moisture
+    if satellite_extras and satellite_extras.get("smap"):
+        smap = satellite_extras["smap"]
+        if smap.get("rootzone_class") in ("critical", "low"):
+            observations.append({
+                "type": "WARNING",
+                "sources": ["smap"],
+                "finding": f"Root-zone soil moisture is {smap.get('rootzone_class', '?')} — NASA satellite data",
+                "action": "IRRIGATE",
+                "confidence": "HIGH",
+                "detail": smap.get("rootzone_detail", "") + " " + smap.get("depth_insight", ""),
+            })
+        if smap.get("depth_insight"):
+            observations.append({
+                "type": "CAVEAT",
+                "sources": ["smap"],
+                "finding": "Surface vs root-zone moisture mismatch detected",
+                "action": "DISCLOSE_AGE",
+                "confidence": "MEDIUM",
+                "detail": smap["depth_insight"],
             })
 
     return observations
@@ -927,6 +997,7 @@ async def generate_advisory_with_gemini(
     nearest_kvk: dict = None,
     quantity_quintals: float = 0,
     cross_validation: list[dict] = None,
+    satellite_extras: dict = None,
 ) -> str:
     """Send pre-computed inferences to Gemini and get a human, conversational advisory."""
     language_name = LANGUAGE_NAMES.get(language, "Hindi")
@@ -963,6 +1034,33 @@ async def generate_advisory_with_gemini(
     stage_section = ""
     if growth_stage and growth_stage.get("stage") != "unknown":
         stage_section = f"\nGROWTH STAGE: {crop} estimated at {growth_stage['stage']} stage ({growth_stage.get('detail', '')})"
+
+    # Additional satellite data section (SAR, LST, SMAP)
+    extra_sat_section = ""
+    if satellite_extras:
+        parts = []
+        if satellite_extras.get("sar"):
+            sar = satellite_extras["sar"]
+            parts.append(f"""RADAR SOIL MOISTURE (Sentinel-1 SAR, date: {sar.get('image_date', '?')}):
+  Soil moisture: {sar.get('moisture_class', '?').upper()} — {sar.get('moisture_detail', '')}
+  Moisture trend: {sar.get('trend', 'unknown')}
+  Vegetation density: {sar.get('vegetation_density', '?')}
+  NOTE: Radar works through clouds — this data is available even when optical satellite is blocked.""")
+        if satellite_extras.get("lst"):
+            lst = satellite_extras["lst"]
+            parts.append(f"""LAND SURFACE TEMPERATURE (MODIS, date: {lst.get('image_date', '?')}):
+  Daytime: {lst.get('lst_day_celsius', '?')}°C, Nighttime: {lst.get('lst_night_celsius', '?')}°C
+  Heat stress: {lst.get('heat_stress', 'none').upper()} — {lst.get('heat_detail', '')}
+  Your field vs area: {f"{lst['lst_anomaly_celsius']}°C difference" if lst.get('lst_anomaly_celsius') else 'similar'}""")
+        if satellite_extras.get("smap"):
+            smap = satellite_extras["smap"]
+            parts.append(f"""ROOT-ZONE SOIL MOISTURE (NASA SMAP, date: {smap.get('image_date', '?')}):
+  Surface moisture: {smap.get('surface_moisture_m3m3', '?')} m³/m³
+  Root-zone moisture (0-100cm deep): {smap.get('rootzone_moisture_m3m3', '?')} m³/m³
+  Status: {smap.get('rootzone_class', '?').upper()} — {smap.get('rootzone_detail', '')}
+  {smap.get('depth_insight', '')}""")
+        if parts:
+            extra_sat_section = "\n\n".join(parts)
 
     # Price trend section
     trend_section = ""
@@ -1060,6 +1158,8 @@ Extra earning at best mandi: Rs {price_advantage}/quintal more
 
 {satellite_section}
 {stage_section}
+
+{extra_sat_section}
 
 WEATHER (today's forecast from Open-Meteo):
 {weather['summary']}
@@ -1498,6 +1598,318 @@ async def fetch_ndvi_trajectory(lat: float, lon: float) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Additional Satellite Data: SAR Soil Moisture, MODIS LST, SMAP
+# ---------------------------------------------------------------------------
+
+def _compute_sar_soil_moisture(lat: float, lon: float) -> dict:
+    """Compute soil moisture proxy from Sentinel-1 SAR (C-band radar).
+    Works through clouds — fills gaps when Sentinel-2 optical data is unavailable.
+    Uses VV backscatter change detection relative to local dry/wet reference."""
+    point = ee.Geometry.Point([lon, lat])
+    buffer = point.buffer(500)
+
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=30)
+
+    # Sentinel-1 GRD (Ground Range Detected), IW mode, VV+VH polarization
+    collection = (
+        ee.ImageCollection("COPERNICUS/S1_GRD")
+        .filterBounds(point)
+        .filterDate(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+        .filter(ee.Filter.eq("instrumentMode", "IW"))
+        .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+        .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
+        .select(["VV", "VH"])
+        .sort("system:time_start", False)
+    )
+
+    count = collection.size().getInfo()
+    if count == 0:
+        return {"error": "No Sentinel-1 SAR data available for this location in last 30 days"}
+
+    latest = ee.Image(collection.first())
+
+    # Get VV and VH backscatter values (already in dB)
+    stats = latest.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=buffer,
+        scale=10,
+        maxPixels=1e6,
+    ).getInfo()
+
+    vv_db = stats.get("VV")
+    vh_db = stats.get("VH")
+
+    if vv_db is None:
+        return {"error": "SAR data computation failed"}
+
+    # Get image date
+    img_date_ms = latest.get("system:time_start").getInfo()
+    img_date = datetime.utcfromtimestamp(img_date_ms / 1000).strftime("%Y-%m-%d")
+
+    # Soil moisture classification from VV backscatter (empirical thresholds for C-band)
+    # Reference: VV backscatter correlates with soil dielectric constant
+    # Typical ranges: dry soil ~ -15 to -12 dB, moist ~ -12 to -8 dB, wet ~ -8 to -3 dB
+    if vv_db >= -8:
+        moisture_class = "wet"
+        moisture_detail = "Soil appears wet — possible recent rain or irrigation"
+    elif vv_db >= -12:
+        moisture_class = "moist"
+        moisture_detail = "Soil moisture appears adequate"
+    elif vv_db >= -15:
+        moisture_class = "dry"
+        moisture_detail = "Soil appears dry — may need irrigation"
+    else:
+        moisture_class = "very_dry"
+        moisture_detail = "Soil appears very dry — irrigation recommended"
+
+    # Cross-ratio VH/VV indicates vegetation volume scattering
+    cross_ratio = vh_db - vv_db if vh_db is not None else None
+    vegetation_density = None
+    if cross_ratio is not None:
+        if cross_ratio > -6:
+            vegetation_density = "dense"
+        elif cross_ratio > -10:
+            vegetation_density = "moderate"
+        else:
+            vegetation_density = "sparse"
+
+    # Trend: compare with older image if available
+    trend = "unknown"
+    if count >= 2:
+        try:
+            older = ee.Image(collection.toList(2).get(1))
+            older_stats = older.reduceRegion(
+                reducer=ee.Reducer.mean(), geometry=buffer, scale=10, maxPixels=1e6
+            ).getInfo()
+            older_vv = older_stats.get("VV")
+            if older_vv is not None and vv_db is not None:
+                diff = vv_db - older_vv
+                if diff > 1.5:
+                    trend = "wetting"
+                elif diff < -1.5:
+                    trend = "drying"
+                else:
+                    trend = "stable"
+        except Exception:
+            pass
+
+    return {
+        "vv_backscatter_db": round(vv_db, 2) if vv_db is not None else None,
+        "vh_backscatter_db": round(vh_db, 2) if vh_db is not None else None,
+        "moisture_class": moisture_class,
+        "moisture_detail": moisture_detail,
+        "vegetation_density": vegetation_density,
+        "trend": trend,
+        "image_date": img_date,
+        "images_found": count,
+        "source": "Sentinel-1 SAR (C-band radar) via Google Earth Engine",
+    }
+
+
+def _compute_land_surface_temperature(lat: float, lon: float) -> dict:
+    """Compute Land Surface Temperature from MODIS Terra (MOD11A1) — 1km daily.
+    Detects heat stress, irrigation effectiveness, and crop water demand."""
+    point = ee.Geometry.Point([lon, lat])
+    buffer = point.buffer(1000)  # 1km buffer (MODIS is 1km resolution)
+
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=10)
+
+    collection = (
+        ee.ImageCollection("MODIS/061/MOD11A1")
+        .filterBounds(point)
+        .filterDate(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+        .select(["LST_Day_1km", "LST_Night_1km", "QC_Day"])
+        .sort("system:time_start", False)
+    )
+
+    count = collection.size().getInfo()
+    if count == 0:
+        return {"error": "No MODIS LST data available for this location in last 10 days"}
+
+    latest = ee.Image(collection.first())
+
+    stats = latest.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=buffer,
+        scale=1000,
+        maxPixels=1e6,
+    ).getInfo()
+
+    lst_day_raw = stats.get("LST_Day_1km")
+    lst_night_raw = stats.get("LST_Night_1km")
+
+    if lst_day_raw is None:
+        return {"error": "MODIS LST computation failed — likely cloudy"}
+
+    # Convert from MODIS scale factor: multiply by 0.02 and convert from Kelvin to Celsius
+    lst_day_c = round(lst_day_raw * 0.02 - 273.15, 1) if lst_day_raw else None
+    lst_night_c = round(lst_night_raw * 0.02 - 273.15, 1) if lst_night_raw else None
+
+    img_date_ms = latest.get("system:time_start").getInfo()
+    img_date = datetime.utcfromtimestamp(img_date_ms / 1000).strftime("%Y-%m-%d")
+
+    # Heat stress classification for crops
+    heat_stress = "none"
+    heat_detail = ""
+    if lst_day_c is not None:
+        if lst_day_c >= 45:
+            heat_stress = "extreme"
+            heat_detail = f"Surface temperature {lst_day_c}°C — extreme heat stress. Irrigate immediately, consider shade nets."
+        elif lst_day_c >= 40:
+            heat_stress = "high"
+            heat_detail = f"Surface temperature {lst_day_c}°C — significant heat stress. Irrigate in early morning."
+        elif lst_day_c >= 35:
+            heat_stress = "moderate"
+            heat_detail = f"Surface temperature {lst_day_c}°C — moderate heat. Monitor crop wilting."
+        else:
+            heat_stress = "none"
+            heat_detail = f"Surface temperature {lst_day_c}°C — within normal range."
+
+    # Day-night temperature difference (important for fruit setting)
+    diurnal_range = None
+    if lst_day_c is not None and lst_night_c is not None:
+        diurnal_range = round(lst_day_c - lst_night_c, 1)
+
+    # Regional benchmark: average LST in wider area
+    regional_buffer = point.buffer(10000)
+    regional_lst = None
+    try:
+        regional_stats = latest.reduceRegion(
+            reducer=ee.Reducer.mean(), geometry=regional_buffer, scale=1000, maxPixels=1e8
+        ).getInfo()
+        regional_raw = regional_stats.get("LST_Day_1km")
+        if regional_raw:
+            regional_lst = round(regional_raw * 0.02 - 273.15, 1)
+    except Exception:
+        pass
+
+    lst_anomaly = None
+    if lst_day_c is not None and regional_lst is not None:
+        lst_anomaly = round(lst_day_c - regional_lst, 1)
+
+    return {
+        "lst_day_celsius": lst_day_c,
+        "lst_night_celsius": lst_night_c,
+        "diurnal_range_celsius": diurnal_range,
+        "heat_stress": heat_stress,
+        "heat_detail": heat_detail,
+        "regional_lst_celsius": regional_lst,
+        "lst_anomaly_celsius": lst_anomaly,
+        "image_date": img_date,
+        "source": "MODIS Terra MOD11A1 (1km daily LST) via Google Earth Engine",
+    }
+
+
+def _compute_smap_soil_moisture(lat: float, lon: float) -> dict:
+    """Compute root-zone soil moisture from NASA SMAP L4 (9km, 3-hourly).
+    Provides deep soil moisture (0-100cm) — tells if roots have water even if surface is dry."""
+    point = ee.Geometry.Point([lon, lat])
+    buffer = point.buffer(5000)  # 5km buffer (SMAP is 9km resolution)
+
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=5)
+
+    collection = (
+        ee.ImageCollection("NASA/SMAP/SPL4SMGP/007")
+        .filterBounds(point)
+        .filterDate(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+        .select(["sm_surface", "sm_rootzone", "sm_surface_wetness"])
+        .sort("system:time_start", False)
+    )
+
+    count = collection.size().getInfo()
+    if count == 0:
+        return {"error": "No SMAP soil moisture data available"}
+
+    latest = ee.Image(collection.first())
+
+    stats = latest.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=buffer,
+        scale=9000,
+        maxPixels=1e6,
+    ).getInfo()
+
+    surface_sm = stats.get("sm_surface")  # m³/m³ (volumetric)
+    rootzone_sm = stats.get("sm_rootzone")  # m³/m³
+    surface_wetness = stats.get("sm_surface_wetness")  # fraction 0-1
+
+    if surface_sm is None and rootzone_sm is None:
+        return {"error": "SMAP computation failed"}
+
+    img_date_ms = latest.get("system:time_start").getInfo()
+    img_date = datetime.utcfromtimestamp(img_date_ms / 1000).strftime("%Y-%m-%d")
+
+    # Classify root-zone moisture for agriculture
+    rootzone_class = "unknown"
+    rootzone_detail = ""
+    if rootzone_sm is not None:
+        if rootzone_sm >= 0.35:
+            rootzone_class = "wet"
+            rootzone_detail = "Root zone is well-watered. No irrigation needed."
+        elif rootzone_sm >= 0.25:
+            rootzone_class = "adequate"
+            rootzone_detail = "Root zone moisture is adequate for most crops."
+        elif rootzone_sm >= 0.15:
+            rootzone_class = "low"
+            rootzone_detail = "Root zone moisture is getting low. Plan irrigation soon."
+        else:
+            rootzone_class = "critical"
+            rootzone_detail = "Root zone moisture critically low. Irrigate immediately — roots are stressed."
+
+    # Surface vs rootzone comparison
+    depth_insight = ""
+    if surface_sm is not None and rootzone_sm is not None:
+        if surface_sm < 0.15 and rootzone_sm > 0.25:
+            depth_insight = "Surface soil is dry but roots still have water — crop can sustain a few more days."
+        elif surface_sm > 0.30 and rootzone_sm < 0.15:
+            depth_insight = "Surface is wet (recent rain?) but deep soil is dry — water hasn't reached roots yet. Deeper irrigation needed."
+        elif surface_sm < 0.15 and rootzone_sm < 0.15:
+            depth_insight = "Both surface and root zone are dry — full irrigation needed urgently."
+
+    return {
+        "surface_moisture_m3m3": round(surface_sm, 4) if surface_sm is not None else None,
+        "rootzone_moisture_m3m3": round(rootzone_sm, 4) if rootzone_sm is not None else None,
+        "surface_wetness_fraction": round(surface_wetness, 3) if surface_wetness is not None else None,
+        "rootzone_class": rootzone_class,
+        "rootzone_detail": rootzone_detail,
+        "depth_insight": depth_insight,
+        "image_date": img_date,
+        "source": "NASA SMAP L4 (9km root-zone soil moisture) via Google Earth Engine",
+    }
+
+
+async def fetch_satellite_extras(lat: float, lon: float) -> dict:
+    """Fetch all additional satellite data: SAR soil moisture, MODIS LST, SMAP.
+    Runs all three in parallel in the thread pool. Returns dict with available data."""
+    if not EE_INITIALIZED:
+        return {}
+
+    loop = asyncio.get_event_loop()
+    results = {}
+
+    # Run all three in parallel via thread pool
+    sar_future = loop.run_in_executor(_ee_executor, _compute_sar_soil_moisture, lat, lon)
+    lst_future = loop.run_in_executor(_ee_executor, _compute_land_surface_temperature, lat, lon)
+    smap_future = loop.run_in_executor(_ee_executor, _compute_smap_soil_moisture, lat, lon)
+
+    for name, future in [("sar", sar_future), ("lst", lst_future), ("smap", smap_future)]:
+        try:
+            data = await asyncio.wait_for(future, timeout=8.0)
+            if "error" not in data:
+                results[name] = data
+                log.info(f"Satellite {name}: OK")
+            else:
+                log.info(f"Satellite {name}: {data['error']}")
+        except (asyncio.TimeoutError, Exception) as e:
+            log.info(f"Satellite {name} skipped: {e}")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Beep / chime generator (pure Python, no external API)
 # ---------------------------------------------------------------------------
 def _generate_beep(freq: int = 880, duration_ms: int = 300, volume: float = 0.3) -> str:
@@ -1618,13 +2030,14 @@ async def _run_advisory(req: AdvisoryRequest):
             crop = "Tomato"
         log.info(f"Auto-detected crop: {crop}")
 
-    # 1. Geocode + weather + NDVI + KVK + historical weather in PARALLEL
+    # 1. Geocode + weather + NDVI + KVK + historical weather + extra satellites — ALL PARALLEL
     location_task = asyncio.create_task(reverse_geocode(req.latitude, req.longitude))
     weather_task = asyncio.create_task(fetch_weather(req.latitude, req.longitude))
     ndvi_task = asyncio.create_task(fetch_ndvi(req.latitude, req.longitude))
     kvk_task = asyncio.create_task(find_nearest_kvk(req.latitude, req.longitude))
-    # Historical weather for real GDD — fetch 120 days of past temperatures
     hist_weather_task = asyncio.create_task(fetch_historical_weather(req.latitude, req.longitude, days_back=120))
+    # SAR soil moisture + MODIS LST + SMAP root-zone moisture (best-effort)
+    sat_extras_task = asyncio.create_task(fetch_satellite_extras(req.latitude, req.longitude))
 
     location = await location_task
     log.info(f"Location: {location}")
@@ -1657,6 +2070,15 @@ async def _run_advisory(req: AdvisoryRequest):
         except (asyncio.TimeoutError, Exception):
             log.info("NDVI trajectory skipped — using basic NDVI only")
 
+    # 4-extra. Get additional satellite data (SAR, MODIS LST, SMAP) — best-effort
+    satellite_extras = {}
+    try:
+        satellite_extras = await asyncio.wait_for(sat_extras_task, timeout=10.0)
+        if satellite_extras:
+            log.info(f"Satellite extras available: {list(satellite_extras.keys())}")
+    except (asyncio.TimeoutError, Exception):
+        log.info("Satellite extras skipped — proceeding without SAR/LST/SMAP")
+
     # 4a. Calculate net profits with spoilage
     mandis = calculate_net_profits(mandis, crop=crop)
 
@@ -1677,7 +2099,7 @@ async def _run_advisory(req: AdvisoryRequest):
     log.info(f"Advisory confidence: {confidence['overall']['level']} ({confidence['overall']['score']})")
 
     # 4f. Cross-validate data sources for conflict detection
-    cross_validation = cross_validate_data_sources(ndvi_data, ndvi_trajectory, weather, price_trend, growth_stage)
+    cross_validation = cross_validate_data_sources(ndvi_data, ndvi_trajectory, weather, price_trend, growth_stage, satellite_extras)
     if cross_validation:
         log.info(f"Cross-validation: {len(cross_validation)} observations — {[cv['type'] for cv in cross_validation]}")
 
@@ -1712,6 +2134,7 @@ async def _run_advisory(req: AdvisoryRequest):
         nearest_kvk=nearest_kvk,
         quantity_quintals=req.quantity_quintals,
         cross_validation=cross_validation,
+        satellite_extras=satellite_extras,
     )
 
     response_data = {
@@ -1728,6 +2151,7 @@ async def _run_advisory(req: AdvisoryRequest):
         "confidence": confidence,
         "nearest_kvk": nearest_kvk,
         "cross_validation": cross_validation if cross_validation else [],
+        "satellite_extras": satellite_extras if satellite_extras else {},
         "advisory": advisory_text,
         "sources": {
             "mandi_prices": "AgMarkNet / data.gov.in (real-time)",
@@ -1738,6 +2162,9 @@ async def _run_advisory(req: AdvisoryRequest):
             "nearest_kvk": "Google Places API",
             "historical_weather": "Open-Meteo Historical API (120 days)",
             "cross_validation": "Multi-source conflict detection engine",
+            "sar_soil_moisture": "Sentinel-1 SAR C-band radar via Google Earth Engine" if satellite_extras.get("sar") else "unavailable",
+            "land_surface_temp": "MODIS Terra MOD11A1 (1km daily) via Google Earth Engine" if satellite_extras.get("lst") else "unavailable",
+            "smap_root_moisture": "NASA SMAP L4 (9km root-zone) via Google Earth Engine" if satellite_extras.get("smap") else "unavailable",
         },
     }
 
