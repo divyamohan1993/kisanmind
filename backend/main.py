@@ -381,57 +381,94 @@ async def reverse_geocode(lat: float, lon: float) -> dict:
     }
 
 
+AGMARKNET_CROP_NAMES = {
+    "okra": ["lady finger", "ladyfinger", "bhindi", "okra"],
+    "tomato": ["tomato"],
+    "potato": ["potato"],
+    "onion": ["onion"],
+    "wheat": ["wheat"],
+    "rice": ["rice", "paddy"],
+    "maize": ["maize"],
+    "cotton": ["cotton"],
+    "sugarcane": ["sugarcane"],
+    "apple": ["apple"],
+    "mango": ["mango"],
+    "banana": ["banana"],
+    "chilli": ["chilli", "green chilli"],
+    "cauliflower": ["cauliflower"],
+    "eggplant": ["brinjal"],
+    "spinach": ["spinach"],
+    "peas": ["peas", "green peas"],
+    "lemon": ["lemon"],
+    "mustard": ["mustard", "rapeseed & mustard"],
+    "chickpea": ["bengal gram", "gram"],
+    "lentil": ["masur", "lentil"],
+    "soybean": ["soyabean"],
+    "sorghum": ["jowar"],
+    "pearl millet": ["bajra"],
+}
+
+
 async def fetch_mandi_prices(crop: str, state: str) -> list[dict]:
     """Fetch real mandi prices. GCS cache first (fast), direct API as fallback."""
     records = []
     source = "unknown"
 
-    # 1. Try GCS cache first (pre-fetched daily, fast, always works from Cloud Run)
+    # Build list of crop names to try (AgMarkNet uses different names)
     crop_lower = crop.lower().replace(" ", "_")
-    gcs_url = f"https://storage.googleapis.com/kisanmind-cache/mandi-prices/agmarknet_{crop_lower}.json"
-    try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            resp = await client.get(gcs_url)
-            if resp.status_code == 200:
-                data = resp.json()
-                all_records = data.get("records", [])
-                records = [r for r in all_records if r.get("state", "").lower() == state.lower()]
-                if not records:
-                    records = all_records[:20]
-                else:
-                    records = records[:20]
-                source = "GCS cache (AgMarkNet data, refreshed daily)"
-                log.info(f"GCS cache hit: {len(records)} records for {crop}/{state}")
-    except Exception as e:
-        log.warning(f"GCS cache miss: {e}")
-
-    # 2. Fallback: direct AgMarkNet API (may be blocked from Cloud Run IPs)
-    if not records:
-        url = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
-        params = {
-            "api-key": AGMARKNET_API_KEY,
-            "format": "json",
-            "limit": 20,
-            "filters[commodity]": crop,
-            "filters[state]": state,
-        }
-        headers = {
-            "User-Agent": "KisanMind/1.0 (Agricultural Advisory; contact@dmj.one)",
-            "Accept": "application/json",
-        }
+    crop_variants = AGMARKNET_CROP_NAMES.get(crop.lower(), [crop.lower()])
+    crop_variants = [crop.lower()] + [v for v in crop_variants if v != crop.lower()]
+    for variant in crop_variants:
+        variant_key = variant.replace(" ", "_")
+        gcs_url = f"https://storage.googleapis.com/kisanmind-cache/mandi-prices/agmarknet_{variant_key}.json"
         try:
-            async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
-                resp = await client.get(url, params=params, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-                records = data.get("records", [])
-                source = "AgMarkNet direct API (real-time)"
-                log.info(f"AgMarkNet direct: {len(records)} records")
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(gcs_url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    all_records = data.get("records", [])
+                    records = [r for r in all_records if r.get("state", "").lower() == state.lower()]
+                    if not records:
+                        records = all_records[:20]
+                    else:
+                        records = records[:20]
+                    source = f"GCS cache ({variant_key})"
+                    log.info(f"GCS cache hit: {len(records)} records for {variant}/{state}")
+                    break
         except Exception as e:
-            log.warning(f"AgMarkNet direct failed: {e}")
+            log.warning(f"GCS cache miss for {variant_key}: {e}")
+
+    # 2. Fallback: direct AgMarkNet API — try all crop name variants
+    if not records:
+        for variant in crop_variants:
+            url = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
+            params = {
+                "api-key": AGMARKNET_API_KEY,
+                "format": "json",
+                "limit": 20,
+                "filters[commodity]": variant.title(),
+                "filters[state]": state,
+            }
+            headers = {
+                "User-Agent": "KisanMind/1.0 (Agricultural Advisory; contact@dmj.one)",
+                "Accept": "application/json",
+            }
+            try:
+                async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
+                    resp = await client.get(url, params=params, headers=headers)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    records = data.get("records", [])
+                    if records:
+                        source = f"AgMarkNet direct ({variant})"
+                        log.info(f"AgMarkNet direct: {len(records)} records for {variant}")
+                        break
+            except Exception as e:
+                log.warning(f"AgMarkNet direct failed for {variant}: {e}")
 
     if not records:
-        raise HTTPException(404, f"No mandi prices found for {crop}. Both AgMarkNet and cache unavailable.")
+        log.warning(f"No mandi prices found for {crop} (variants: {crop_variants}). Returning empty.")
+        return []
 
     mandis = []
     for r in records:
@@ -454,7 +491,8 @@ async def fetch_mandi_prices(crop: str, state: str) -> list[dict]:
         })
 
     if not mandis:
-        raise HTTPException(404, f"No valid mandi prices (modal_price > 0) found for {crop}.")
+        log.warning(f"No valid mandi prices (modal_price > 0) for {crop}.")
+        return []
 
     return mandis
 
@@ -2415,17 +2453,26 @@ async def _run_advisory(req: AdvisoryRequest):
         log.info(f"Cross-validation: {len(cross_validation)} observations — {[cv['type'] for cv in cross_validation]}")
 
     # 5. Get nearest KVK
-    nearest_kvk = await kvk_task
-    log.info(f"Nearest KVK: {nearest_kvk['name']} ({nearest_kvk.get('distance_km', '?')} km)")
+    try:
+        nearest_kvk = await kvk_task
+        if not nearest_kvk:
+            nearest_kvk = {"name": "KVK", "phone": "1800-180-1551", "distance_km": "?"}
+    except Exception:
+        nearest_kvk = {"name": "KVK", "phone": "1800-180-1551", "distance_km": "?"}
+    log.info(f"Nearest KVK: {nearest_kvk.get('name', '?')} ({nearest_kvk.get('distance_km', '?')} km)")
 
     # 6. Find best mandi and local/closest mandi
     mandis_with_profit = [m for m in mandis if m.get("net_profit_per_quintal") is not None]
     if mandis_with_profit:
         best_mandi = max(mandis_with_profit, key=lambda m: m["net_profit_per_quintal"])
         local_mandi = min(mandis_with_profit, key=lambda m: m["distance_km"])
-    else:
+    elif mandis:
         best_mandi = max(mandis, key=lambda m: m["modal_price"])
-        local_mandi = mandis[0] if mandis else None
+        local_mandi = mandis[0]
+    else:
+        best_mandi = {"market": "N/A", "modal_price": 0, "distance_km": 0, "net_profit_per_quintal": 0}
+        local_mandi = None
+        log.warning(f"No mandi data available for {crop} — advisory will skip mandi section")
 
     # 7. Generate advisory via Gemini with all pre-computed data
     advisory_text = await generate_advisory_with_gemini(
