@@ -296,29 +296,28 @@ kisanmind/
 ├── backend/
 │   ├── main.py                 # FastAPI backend — all endpoints + real APIs
 │   ├── gemini_live.py          # Gemini Live WebSocket session manager
-│   ├── satellite_cache.py      # Pre-computed satellite data cache (O(1) lookup)
-│   └── __init__.py
+│   └── satellite_cache.py      # Pre-computed satellite data cache (O(1) lookup)
 ├── frontend/
-│   ├── app/
-│   │   ├── page.tsx            # Voice-first conversation interface
-│   │   ├── layout.tsx          # App layout
-│   │   ├── globals.css         # Tailwind CSS theme
-│   │   └── hooks/
-│   │       └── useGeolocation.ts
-│   ├── next.config.ts
-│   └── package.json
+│   └── app/
+│       ├── page.tsx            # Voice-first conversation interface
+│       ├── layout.tsx          # Root layout
+│       ├── globals.css         # Tailwind CSS theme
+│       └── useGeolocation.ts   # Browser geolocation + IP fallback
 ├── data/
 │   └── satellite_cache/
 │       └── latest.json         # Pre-computed satellite grid (NDVI/SAR/LST/SMAP)
 ├── scripts/
-│   ├── precompute_satellite.py # Batch satellite data pre-computation
-│   └── refresh_mandi_cache.py  # Mandi price cache refresh
+│   ├── precompute_satellite.py # Batch satellite data pre-computation (Earth Engine)
+│   └── refresh_mandi_cache.py  # AgMarkNet price cache refresh → GCS bucket
 ├── infrastructure/
 │   ├── deploy.sh               # VM Docker deployment
 │   └── entrypoint.sh           # Docker entrypoint (frontend + backend)
 ├── Dockerfile                  # Multi-stage build (Node.js + Python)
 ├── requirements.txt            # Python dependencies
 ├── .env.example                # Environment variable template
+├── CHANGELOG.md                # Release history
+├── CONTRIBUTING.md             # Contribution guide
+├── LICENSE                     # MIT License
 └── README.md
 ```
 
