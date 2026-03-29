@@ -11,7 +11,7 @@ FRONTEND_PID=$!
 
 # Start the Python backend API on port 8080
 cd /app
-python -m agents.brain.orchestrator &
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8080 &
 BACKEND_PID=$!
 
 echo "Frontend running on :3000 (PID: $FRONTEND_PID)"
