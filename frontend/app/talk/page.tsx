@@ -126,7 +126,18 @@ function waitForAudioEnd(audio: HTMLAudioElement | null): Promise<void> {
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 export default function TalkPage() {
-  const [language, setLanguage] = useState("hi");
+  // Persist language in localStorage so it survives refresh
+  const [language, setLanguageRaw] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("kisanmind_lang") || "hi";
+    }
+    return "hi";
+  });
+  const setLanguage = (lang: string) => {
+    setLanguageRaw(lang);
+    if (typeof window !== "undefined") localStorage.setItem("kisanmind_lang", lang);
+  };
+
   const [callState, setCallState] = useState<CallState>("pre-call");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [summary, setSummary] = useState<CallSummary | null>(null);
@@ -237,7 +248,7 @@ export default function TalkPage() {
         if (elapsed >= MAX_RECORDING) { clearInterval(interval); resolve("timeout"); return; }
 
         const level = getAudioLevel();
-        const speaking = level > 12; // threshold for speech vs silence
+        const speaking = level > 30; // raised threshold — ignores fans, traffic, wind noise
 
         if (speaking) {
           isSpeaking = true;
@@ -515,7 +526,7 @@ export default function TalkPage() {
         )}
 
         <Link href="/" className="rounded-lg bg-white/5 px-3 py-2 text-xs text-white/60 hover:bg-white/10">
-          Dashboard
+          {t(language, "dashboard")}
         </Link>
       </div>
 
@@ -722,7 +733,7 @@ export default function TalkPage() {
               {t(language, "callBtn")}
             </p>
             <p className="mt-2 text-xs text-white/30 tracking-wide text-center max-w-[280px]">
-              150M+ Indian Farmers | 22 Languages | Real Satellite + Mandi Data
+              {t(language, "tagline")}
             </p>
           </>
         ) : callState === "ended" ? null : (
