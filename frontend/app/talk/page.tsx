@@ -92,6 +92,7 @@ export default function TalkPage() {
   const callActiveRef = useRef(false);
   const sessionIdRef = useRef("");
   const silenceCountRef = useRef(0);
+  const advisoryDeliveredRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const geo = useGeolocation();
@@ -319,21 +320,23 @@ export default function TalkPage() {
       setCallState("processing");
       setStatusText("");
 
-      // Start trivia in parallel with the API call
-      const TRIVIA = [
-        "Please wait... fetching live satellite data and mandi prices for you.",
-        "Did you know? Selling at the right mandi can earn Rs 200-500 more per quintal.",
-        "We check Sentinel-2 satellite images to assess your crop health.",
-        "Weather-informed farming reduces crop loss by up to 30%.",
-      ];
+      // Show trivia only on first data fetch (not follow-ups)
       let triviaDone = false;
-      const triviaPromise = (async () => {
-        for (const fact of TRIVIA) {
-          if (triviaDone || !callActiveRef.current) break;
-          addMessage("kisanmind", fact, "status", fact);
-          await new Promise(r => setTimeout(r, 3000));
-        }
-      })();
+      if (!advisoryDeliveredRef.current) {
+        const TRIVIA = [
+          "Please wait... fetching live satellite data and mandi prices for you.",
+          "Did you know? Selling at the right mandi can earn Rs 200-500 more per quintal.",
+          "We use European Sentinel-2 satellite to check your crop health from space.",
+          "Weather-informed farming reduces crop loss by up to 30%.",
+        ];
+        (async () => {
+          for (const fact of TRIVIA) {
+            if (triviaDone || !callActiveRef.current) break;
+            addMessage("kisanmind", fact, "status", fact);
+            await new Promise(r => setTimeout(r, 3000));
+          }
+        })();
+      }
 
       try {
         const chatResp = await fetch(`${API_BASE}/api/chat`, {
@@ -353,13 +356,19 @@ export default function TalkPage() {
         // Speak Gemini's response
         setCallState("speaking");
         const kind = chatData.has_advisory ? "advisory" : "conversation";
+        if (chatData.has_advisory) advisoryDeliveredRef.current = true;
         addMessage("kisanmind", chatData.response, kind, chatData.response_en || chatData.response);
         const respAudio = await playTTS(chatData.response, language);
         currentAudioRef.current = respAudio;
         await waitForAudioEnd(respAudio);
 
-        // KEEP CALL OPEN after advisory — farmer may ask more questions
-        // The while loop continues, farmer speaks again or stays silent
+        // If Gemini detected goodbye, end the call
+        if (chatData.call_complete) {
+          callActiveRef.current = false;
+          setCallState("ended");
+          return;
+        }
+        // Otherwise keep listening — farmer may ask more
       } catch {
         triviaDone = true;
         addMessage("kisanmind", "Technical issue. Please try again.", "status", "Technical issue. Please try again.");
@@ -372,6 +381,7 @@ export default function TalkPage() {
     callActiveRef.current = true;
     silenceCountRef.current = 0;
     sessionIdRef.current = "";
+    advisoryDeliveredRef.current = false;
     setMessages([]);
     setCallState("connecting");
     setStatusText("");
