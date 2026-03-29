@@ -147,13 +147,12 @@ async def cache_set(key: str, value: dict):
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Gemini model with fallback — primary model may be overloaded
-GEMINI_MODELS = ["gemini-3.0-flash", "gemini-2.5-flash"]
-GEMINI_REASONING_MODELS = ["gemini-3.1-pro", "gemini-3.0-flash"]
+GEMINI_MODELS = ["gemini-3.0-flash"]
 
 def _gemini_generate(contents, config=None, use_pro=False):
-    """Call Gemini with model fallback. Tries each model once."""
+    """Call Gemini with model fallback."""
     last_err = None
-    models = GEMINI_REASONING_MODELS if use_pro else GEMINI_MODELS
+    models = GEMINI_MODELS
     for model in models:
         try:
             kwargs = {"model": model, "contents": contents}
