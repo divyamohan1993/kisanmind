@@ -327,24 +327,11 @@ export default function TalkPage() {
     silenceCountRef.current = 0;
     addMessage("farmer", transcript);
 
-    // Engagement fact WHILE fetching
-    const FACTS: Record<string, string[]> = {
-      hi: [
-        "बहुत अच्छा! मैं अभी आपके इलाके की मंडी भाव, मौसम और सैटेलाइट से फसल की सेहत देख रहा हूँ। बस कुछ सेकंड लगेंगे।",
-        "ठीक है! आपके लिए असली डेटा जोड़ रहा हूँ। सही मंडी चुनने से हर क्विंटल पर 200 से 500 रुपये ज्यादा मिल सकते हैं। यही मैं ढूंढ रहा हूँ।",
-      ],
-      en: [
-        "Great! I'm now checking real mandi prices, weather, and satellite crop health for your area. Just a few seconds.",
-        "Got it! Pulling real data for you. Choosing the right mandi can earn ₹200-500 extra per quintal.",
-      ],
-    };
-    const facts = FACTS[language] || FACTS["hi"];
-    const engagementText = facts[Math.floor(Math.random() * facts.length)];
-
+    // Start advisory fetch in background
     setCallState("speaking");
-    addMessage("kisanmind", engagementText);
+    let advisoryDone = false;
+    let advisoryResult: Record<string, unknown> | null = null;
 
-    // Start advisory + engagement audio in parallel
     const advisoryPromise = fetch(`${API_BASE}/api/advisory`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -352,13 +339,42 @@ export default function TalkPage() {
         latitude: geo.latitude, longitude: geo.longitude,
         crop: "auto", language, intent: transcript,
       }),
-    }).then(r => r.json()).catch(() => null);
+    }).then(r => r.json()).then(d => { advisoryResult = d; advisoryDone = true; return d; }).catch(() => { advisoryDone = true; return null; });
 
-    const engagementAudio = await playTTS(engagementText, language);
-    const [advisoryResult] = await Promise.all([
-      advisoryPromise,
-      waitForAudioEnd(engagementAudio),
-    ]);
+    // Keep farmer engaged with rotating facts until advisory returns
+    const FACTS = [
+      "आपकी कॉल प्रोसेस हो रही है। मैं अभी सरकारी मंडी भाव ला रहा हूँ।",
+      "क्या आप जानते हैं? सही मंडी में बेचने से हर क्विंटल पर 200 से 500 रुपये ज्यादा मिल सकते हैं।",
+      "आपके इलाके का सैटेलाइट डेटा भी देख रहा हूँ। इससे फसल की सेहत पता चलती है।",
+      "मौसम की जानकारी से फसल खराब होने का खतरा 30 प्रतिशत तक कम हो जाता है।",
+      "भारत में 15 करोड़ से ज्यादा किसान परिवार हैं। किसानमाइंड सबकी मदद करना चाहता है।",
+      "बस कुछ सेकंड और। आपके लिए सबसे अच्छी मंडी ढूंढ रहा हूँ।",
+    ];
+    const FACTS_EN = [
+      "Processing your call. Fetching live government mandi prices right now.",
+      "Did you know? Selling at the right mandi can earn ₹200-500 more per quintal.",
+      "Also checking satellite data for your area to assess crop health.",
+      "Weather-informed farming reduces crop loss risk by up to 30%.",
+      "India has over 150 million farming families. KisanMind aims to help them all.",
+      "Almost done. Finding the most profitable mandi for you.",
+    ];
+    const facts = language === "en" ? FACTS_EN : FACTS;
+
+    let factIdx = 0;
+    while (!advisoryDone && callActiveRef.current && factIdx < facts.length) {
+      const factText = facts[factIdx];
+      addMessage("kisanmind", factText);
+      const factAudio = await playTTS(factText, language);
+      await waitForAudioEnd(factAudio);
+      factIdx++;
+      // Small pause between facts
+      if (!advisoryDone) await new Promise(r => setTimeout(r, 500));
+    }
+
+    // If advisory still not done after all facts, wait silently
+    if (!advisoryDone) {
+      await advisoryPromise;
+    }
 
     if (!callActiveRef.current) return;
 
