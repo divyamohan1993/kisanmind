@@ -2640,7 +2640,7 @@ async def text_to_speech(req: TTSRequest):
         )
         audio_config = tts.AudioConfig(
             audio_encoding=tts.AudioEncoding.MP3,
-            speaking_rate=0.85,
+            speaking_rate=1.15,
         )
         response = tts_client.synthesize_speech(
             input=synthesis_input,
@@ -3351,6 +3351,16 @@ async def reverse_geocode_by_name(location_name: str) -> dict:
         loc = data["results"][0]["geometry"]["location"]
         return {"latitude": loc["lat"], "longitude": loc["lng"]}
     return {"latitude": 28.6139, "longitude": 77.2090}  # Default: Delhi
+
+
+class GeocodeNameRequest(BaseModel):
+    location_name: str
+
+
+@app.post("/api/geocode-name")
+async def geocode_name(req: GeocodeNameRequest):
+    """Geocode a location name to lat/lon — used when GPS is unavailable."""
+    return await reverse_geocode_by_name(req.location_name)
 
 
 # ---------------------------------------------------------------------------

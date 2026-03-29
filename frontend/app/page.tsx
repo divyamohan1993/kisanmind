@@ -43,10 +43,16 @@ export default function TalkPage() {
   useEffect(() => { const s = localStorage.getItem("kisanmind_lang"); if (s) setLanguage(s); }, []);
   const setLang = (l: string) => { setLanguage(l); localStorage.setItem("kisanmind_lang", l); };
 
+  // Use refs for values needed in long-running async loops
+  const languageRef = useRef(language);
+  useEffect(() => { languageRef.current = language; }, [language]);
+
   const [callState, setCallState] = useState<CallState>("pre-call");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [liveText, setLiveText] = useState("");
   const [showLang, setShowLang] = useState(false);
+  const [locationInput, setLocationInput] = useState("");
+  const [askingLocation, setAskingLocation] = useState(false);
 
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const callActiveRef = useRef(false);
@@ -55,6 +61,8 @@ export default function TalkPage() {
   const advisoryDeliveredRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const geo = useGeolocation();
+  const geoRef = useRef(geo);
+  useEffect(() => { geoRef.current = geo; }, [geo]);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
@@ -80,7 +88,8 @@ export default function TalkPage() {
       const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SR) { resolve(""); return; }
       const rec = new SR();
-      rec.lang = langMap[language] || "hi-IN"; rec.continuous = false; rec.interimResults = true;
+      const lang = languageRef.current;
+      rec.lang = langMap[lang] || "hi-IN"; rec.continuous = false; rec.interimResults = true;
       let final = ""; let to: ReturnType<typeof setTimeout>;
       rec.onresult = (e: any) => {
         let interim = "";
@@ -95,16 +104,20 @@ export default function TalkPage() {
       const ci = setInterval(() => { if (!callActiveRef.current) { clearInterval(ci); rec.stop(); } }, 500);
       rec.onend = () => { clearTimeout(to); clearInterval(ci); setLiveText(""); resolve(final.trim()); };
     });
-  }, [language]);
+  }, []);
 
-  // Multi-turn conversation
+  // Multi-turn conversation — uses refs for always-current language & geo
   const conversationLoop = useCallback(async () => {
+    const lang = () => languageRef.current;
+    const lat = () => geoRef.current.latitude || 0;
+    const lon = () => geoRef.current.longitude || 0;
+
     setCallState("processing");
     try {
-      const g = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: "Hello, I need farming advice.", language, latitude: geo.latitude || 0, longitude: geo.longitude || 0 }) });
+      const g = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: "Hello, I need farming advice.", language: lang(), latitude: lat(), longitude: lon() }) });
       const gd = await g.json(); sessionIdRef.current = gd.session_id || sessionIdRef.current;
       setCallState("speaking"); addMsg("kisanmind", stripMarkdown(gd.response), "conversation", stripMarkdown(gd.response_en || gd.response));
-      const ga = await playTTS(gd.response, language); await waitForAudioEnd(ga);
+      const ga = await playTTS(gd.response, lang()); await waitForAudioEnd(ga);
     } catch { addMsg("kisanmind", "Connection issue.", "status", "Connection issue."); callActiveRef.current = false; setCallState("ended"); return; }
 
     while (callActiveRef.current) {
@@ -119,19 +132,19 @@ export default function TalkPage() {
       if (!advisoryDeliveredRef.current) {
         (async () => {
           try {
-            const tr = await fetch(`${API_BASE}/api/trivia`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ crop: transcript, language }) });
+            const tr = await fetch(`${API_BASE}/api/trivia`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ crop: transcript, language: lang() }) });
             const td = await tr.json();
             for (const fact of (td.trivia || [])) {
               if (triviaDone || !callActiveRef.current) break;
               setCallState("speaking"); addMsg("kisanmind", fact, "status", fact);
-              const fa = await playTTS(fact, language); await waitForAudioEnd(fa);
+              const fa = await playTTS(fact, lang()); await waitForAudioEnd(fa);
             }
           } catch {}
         })();
       }
 
       try {
-        const cr = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: transcript, language, latitude: geo.latitude || 0, longitude: geo.longitude || 0 }) });
+        const cr = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: transcript, language: lang(), latitude: lat(), longitude: lon() }) });
         triviaDone = true; const cd = await cr.json();
         setCallState("speaking");
         const clean = stripMarkdown(cd.response); const cleanEn = stripMarkdown(cd.response_en || cd.response);
@@ -139,16 +152,57 @@ export default function TalkPage() {
         if (cd.has_advisory) advisoryDeliveredRef.current = true;
         addMsg("kisanmind", clean, kind, cleanEn);
         if (cd.has_advisory) { try { const b = await fetch(`${API_BASE}/api/beep`); if (b.ok) { const bd = await b.json(); const beep = new Audio(`data:audio/wav;base64,${bd.audio_base64}`); await beep.play(); await waitForAudioEnd(beep); } } catch {} }
-        const ra = await playTTS(clean, language); currentAudioRef.current = ra; await waitForAudioEnd(ra);
+        const ra = await playTTS(clean, lang()); currentAudioRef.current = ra; await waitForAudioEnd(ra);
         if (cd.call_complete || cd.has_advisory) { callActiveRef.current = false; setCallState("ended"); return; }
       } catch { triviaDone = true; addMsg("kisanmind", "Technical issue.", "status", "Technical issue."); }
     }
-  }, [language, geo.latitude, geo.longitude, listenOnce, addMsg]);
+  }, [listenOnce, addMsg]);
+
+  // Resolve location from text input via backend geocoding
+  const resolveLocationByName = useCallback(async (name: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/geocode-name`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location_name: name }) });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.latitude && data.longitude) {
+          geoRef.current = { ...geoRef.current, latitude: data.latitude, longitude: data.longitude, accuracy: 1000, loading: false, error: null };
+        }
+      }
+    } catch {}
+  }, []);
 
   const startCall = useCallback(async () => {
+    // Re-request GPS for freshest location
+    geoRef.current.refresh();
+    setCallState("connecting");
+
+    // Wait up to 5 seconds for GPS
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      if (geoRef.current.latitude && geoRef.current.longitude) break;
+    }
+
+    // If still no GPS, ask user for location
+    if (!geoRef.current.latitude || !geoRef.current.longitude) {
+      setAskingLocation(true);
+      setCallState("pre-call");
+      return;
+    }
+
     callActiveRef.current = true; silenceCountRef.current = 0; sessionIdRef.current = ""; advisoryDeliveredRef.current = false;
-    setMessages([]); setCallState("connecting"); await conversationLoop();
+    setMessages([]);
+    await conversationLoop();
   }, [conversationLoop]);
+
+  const startCallWithLocation = useCallback(async () => {
+    if (!locationInput.trim()) return;
+    setAskingLocation(false);
+    setCallState("connecting");
+    await resolveLocationByName(locationInput.trim());
+    callActiveRef.current = true; silenceCountRef.current = 0; sessionIdRef.current = ""; advisoryDeliveredRef.current = false;
+    setMessages([]);
+    await conversationLoop();
+  }, [conversationLoop, locationInput, resolveLocationByName]);
 
   const endCall = useCallback(() => {
     callActiveRef.current = false; currentAudioRef.current?.pause(); currentAudioRef.current = null;
@@ -191,11 +245,27 @@ export default function TalkPage() {
                 ))}
               </div>
 
-              <button onClick={startCall}
-                className="inline-flex items-center gap-3 px-10 py-4 rounded-lg bg-[#138808] text-white text-lg font-bold shadow-lg hover:bg-[#0f6d06] active:scale-95 transition-transform">
-                <Phone size={24} /> Call KisanMind
-              </button>
-              <p className="text-xs text-gray-400 mt-3">Tap to speak with your AI farming advisor in your language</p>
+              {askingLocation ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-gray-600">GPS unavailable. Enter your village/town:</p>
+                  <input type="text" value={locationInput} onChange={e => setLocationInput(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && startCallWithLocation()}
+                    placeholder="e.g. Solan, Himachal Pradesh"
+                    className="w-full max-w-xs mx-auto block px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#138808]" autoFocus />
+                  <button onClick={startCallWithLocation}
+                    className="inline-flex items-center gap-3 px-10 py-4 rounded-lg bg-[#138808] text-white text-lg font-bold shadow-lg hover:bg-[#0f6d06] active:scale-95 transition-transform">
+                    <Phone size={24} /> Start Call
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <button onClick={startCall}
+                    className="inline-flex items-center gap-3 px-10 py-4 rounded-lg bg-[#138808] text-white text-lg font-bold shadow-lg hover:bg-[#0f6d06] active:scale-95 transition-transform">
+                    <Phone size={24} /> Call KisanMind
+                  </button>
+                  <p className="text-xs text-gray-400 mt-3">Tap to speak with your AI farming advisor in your language</p>
+                </>
+              )}
             </div>
 
             {/* Data sources — visible on desktop */}
