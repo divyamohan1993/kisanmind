@@ -503,12 +503,19 @@ async def fetch_mandi_prices(crop: str, state: str) -> list[dict]:
                     resp.raise_for_status()
                     data = resp.json()
                     records = data.get("records", [])
+                    if not records:
+                        # Try without state filter
+                        params2 = {k: v for k, v in params.items() if k != "filters[state]"}
+                        params2["limit"] = 20
+                        resp2 = await client.get(url, params=params2, headers=headers)
+                        resp2.raise_for_status()
+                        records = resp2.json().get("records", [])[:20]
                     if records:
                         source = f"AgMarkNet direct ({variant})"
                         log.info(f"AgMarkNet direct: {len(records)} records for {variant}")
                         break
             except Exception as e:
-                log.warning(f"AgMarkNet direct failed for {variant}: {e}")
+                log.warning(f"AgMarkNet direct failed for {variant}: {type(e).__name__}: {e}")
 
     if not records:
         log.warning(f"No mandi prices found for {crop} (variants: {crop_variants}). Returning empty.")
