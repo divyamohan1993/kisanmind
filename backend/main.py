@@ -555,27 +555,31 @@ async def generate_advisory_with_gemini(
     else:
         satellite_section = "Satellite crop health data: unavailable"
 
-    prompt = f"""You are KisanMind, a friendly agricultural advisor. Generate advisory in Hindi (Devanagari script).
+    prompt = f"""You are KisanMind, a friendly agricultural advisor. Generate advisory in plain English.
 
 RULES:
 - Plain text only. NO markdown, NO asterisks, NO bold, NO bullets, NO numbered lists.
-- Simple conversational tone — like talking to a friend on phone.
-- Use local units (क्विंटल, बीघा).
-- ONLY state facts from data below. DO NOT invent anything.
-- For pesticide/chemical: refer to Krishi Vigyan Kendra (KVK), helpline 1800-180-1551.
+- Simple conversational tone — like talking to a friend on phone. Use short sentences.
+- ONLY state facts from the data below. DO NOT invent anything.
+- For pesticide/chemical treatment: refer to nearest Krishi Vigyan Kendra (KVK), helpline 1800-180-1551.
 - Under 200 words.
 
 DATA:
 Location: {location_name}, {state}
 Crop: {crop}
-Best mandi: {best_mandi['market']} — ₹{best_mandi['modal_price']}/क्विंटल, {best_mandi.get('distance_km', '?')} km, {best_mandi.get('duration_text', '?')}
-Local mandi: {local_mandi_name} — ₹{local_price}/क्विंटल
-Fayda: ₹{price_advantage}/क्विंटल ज्यादा
-Weather: {weather['summary']}
+Best mandi: {best_mandi['market']} at Rs {best_mandi['modal_price']} per quintal, {best_mandi.get('distance_km', '?')} km away, {best_mandi.get('duration_text', '?')} travel time
+Local mandi: {local_mandi_name} at Rs {local_price} per quintal
+Extra profit at best mandi: Rs {price_advantage} per quintal more
+Weather forecast: {weather['summary']}
 {satellite_section}
 
-Cover: best mandi, weather actions, crop health, KVK if needed.
-End: "यह डेटा आज की AgMarkNet, सैटेलाइट और मौसम रिपोर्ट से है। अंतिम फैसला आपका है।"
+Cover these topics:
+- Which mandi to sell at (best price after transport cost)
+- Weather actions for next 2-3 days (what to do, what to avoid)
+- Crop health from satellite (explain simply)
+- Refer to KVK if any pest/disease issue detected
+
+End with: "This data is from today's AgMarkNet, satellite and weather reports. The final decision is yours."
 """
 
     response = gemini_client.models.generate_content(
@@ -595,24 +599,16 @@ End: "यह डेटा आज की AgMarkNet, सैटेलाइट औ�
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = text.strip()
 
-    # Advisory is generated in Hindi. If user wants a different language, translate it.
-    if language not in ("hi", "en"):
+    # Advisory is generated in English. Translate to farmer's chosen language.
+    if language != "en":
         try:
             translate_client = translate.Client()
-            result = translate_client.translate(text, target_language=language, source_language="hi")
+            result = translate_client.translate(text, target_language=language, source_language="en")
             import html
             text = html.unescape(result["translatedText"])
-            log.info(f"Translated advisory from Hindi to {language}")
+            log.info(f"Translated advisory from English to {language}")
         except Exception as e:
-            log.warning(f"Translation to {language} failed, keeping Hindi: {e}")
-    elif language == "en":
-        try:
-            translate_client = translate.Client()
-            result = translate_client.translate(text, target_language="en", source_language="hi")
-            import html
-            text = html.unescape(result["translatedText"])
-        except Exception as e:
-            log.warning(f"Translation to English failed: {e}")
+            log.warning(f"Translation to {language} failed, keeping English: {e}")
 
     # Hallucination verification runs in BACKGROUND — don't block the response
     # The advisory is already constrained by the strict prompt rules above
