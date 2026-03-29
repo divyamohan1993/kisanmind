@@ -368,15 +368,20 @@ export default function TalkPage() {
               ))}
 
               {(callState === "processing" || callState === "connecting") && (
-                <div className="flex justify-start" role="status" aria-live="assertive" aria-busy="true" aria-label={callState === "connecting" ? "Connecting" : "Generating advice — may take up to 1 minute"}>
+                <div className="flex justify-start" role="status" aria-live="assertive" aria-busy="true" aria-label={messages.filter(m => m.type === "farmer").length >= 2 ? "Generating advice — may take up to 1 minute" : "Processing"}>
                   <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm">
-                    <div className="flex gap-1.5 mb-2">
+                    <div className="flex gap-1.5">
                       <span className="h-2 w-2 rounded-full bg-[#138808] animate-bounce" />
                       <span className="h-2 w-2 rounded-full bg-[#FF9933] animate-bounce [animation-delay:150ms]" />
                       <span className="h-2 w-2 rounded-full bg-[#1a365d] animate-bounce [animation-delay:300ms]" />
                     </div>
-                    <p className="text-xs text-gray-700">{callState === "connecting" ? "Connecting..." : "Fetching satellite, mandi & weather data..."}</p>
-                    <p className="text-xs text-gray-700 mt-0.5">This may take up to 1 minute. A beep will alert you when ready.</p>
+                    {messages.filter(m => m.type === "farmer").length >= 2 && !advisoryDeliveredRef.current && (
+                      <div className="mt-2 bg-[#FFF7ED] border border-[#FF9933]/30 rounded p-2">
+                        <p className="text-xs font-semibold text-[#1a365d]">🛰️ Generating your advisory...</p>
+                        <p className="text-xs text-gray-700 mt-0.5">Fetching live data from 4 satellites + mandi prices + weather. This may take up to 1 minute.</p>
+                        <p className="text-xs text-gray-700 mt-0.5">You will hear a <strong>beep</strong> when your advice is ready.</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
