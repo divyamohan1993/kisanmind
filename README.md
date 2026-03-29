@@ -71,43 +71,52 @@ This required fusing **9 real data sources** in real-time:
 ```mermaid
 graph TB
     subgraph "Farmer Interface"
-        A[Web Browser<br/>kisanmind.dmj.one] -->|Voice / Text| B[Next.js 16 Frontend<br/>Port 8080]
+        A[Web Browser<br/>kisanmind.dmj.one] -->|Voice / Text| B[Next.js 16 Frontend<br/>Port 3000]
         T[Phone Call<br/>+1 260-254-7946] -->|Twilio Webhook| D
     end
 
     subgraph "Backend — FastAPI"
         B -->|/api/*| D[FastAPI Backend<br/>Port 8081]
-        D --> E[Gemini 3.1 Pro<br/>Advisory Generation]
-        D --> F[Gemini 3.1 Flash Lite<br/>Fact-Check + Intent]
+        D --> E[Gemini 3 Flash<br/>Advisory + Chat + Intent]
         D --> WS[Gemini Live<br/>WebSocket Voice]
+        D --> XV[Cross-Validation<br/>Conflict Detection Engine]
     end
 
-    subgraph "Real Data Sources"
-        D -->|Earth Engine API| G[4 Satellites<br/>Sentinel-2 NDVI · SAR Moisture<br/>MODIS LST · SMAP Root-Zone]
-        D -->|data.gov.in| H[AgMarkNet<br/>Mandi Prices]
-        D -->|Open-Meteo| I[Weather<br/>5-Day Forecast]
-        D -->|Maps Platform| J[Google Maps<br/>Distance Matrix]
-        D -->|Places API| K[Nearest KVK<br/>Agriculture Centre]
+    subgraph "4 Satellites via Earth Engine"
+        D -->|Sentinel-2| S2[NDVI / EVI / NDWI<br/>10m Crop Health]
+        D -->|Sentinel-1 SAR| S1[VV / VH Backscatter<br/>Soil Moisture Through Clouds]
+        D -->|MODIS Terra| MT[Day / Night LST<br/>1km Heat Stress Detection]
+        D -->|NASA SMAP L4| SM[Surface + Root-Zone<br/>9km 0–100cm Deep Moisture]
+    end
+
+    subgraph "Market + Weather + Location"
+        D -->|data.gov.in| H[AgMarkNet<br/>112 Crops · 90-Day History]
+        D -->|Open-Meteo| I[5-Day Forecast<br/>90-Day Historical · GDD]
+        D -->|Maps Platform| J[Distance Matrix<br/>Geocoding · KVK Search]
     end
 
     subgraph "Voice Pipeline"
         D -->|STT V2| L[Cloud Speech-to-Text<br/>22 Languages]
-        D -->|TTS| M[Cloud TTS<br/>Wavenet / Neural2]
+        D -->|TTS| M[Cloud TTS Wavenet<br/>10 Indian Voices]
         D -->|Translation v3| N[Cloud Translation<br/>22 Languages]
     end
 
-    subgraph "Caching"
-        D --> O[L1: In-Memory<br/>0.13s Response]
-        D --> P[L2: Cloud Storage<br/>~200ms Response]
+    subgraph "3-Tier Cache"
+        D --> O[L0: Satellite Cache<br/>3,788 Points · O-1 Lookup]
+        D --> P[L1: In-Memory<br/>0.13s · TTL-Based]
+        D --> Q[L2: Cloud Storage<br/>~200ms · Persistent]
     end
 
     style A fill:#138808,color:#fff
     style T fill:#f43f5e,color:#fff
     style D fill:#1a365d,color:#fff
     style E fill:#6366f1,color:#fff
-    style G fill:#FF9933,color:#fff
+    style S2 fill:#22c55e,color:#fff
+    style S1 fill:#FF9933,color:#fff
+    style MT fill:#ef4444,color:#fff
+    style SM fill:#38bdf8,color:#fff
     style H fill:#FF9933,color:#fff
-    style I fill:#FF9933,color:#fff
+    style I fill:#38bdf8,color:#fff
 ```
 
 ## Voice Call Flow
@@ -115,36 +124,49 @@ graph TB
 ```mermaid
 sequenceDiagram
     participant F as Farmer
-    participant T as Twilio / Browser
-    participant BE as FastAPI Backend
-    participant G as Gemini
-    participant EE as Earth Engine
+    participant FE as Browser / Twilio
+    participant BE as FastAPI
+    participant G as Gemini 3 Flash
+    participant EE as Earth Engine (4 Satellites)
     participant AM as AgMarkNet
     participant WX as Open-Meteo
+    participant GM as Google Maps
 
-    F->>T: Speaks in native language
-    T->>BE: POST /api/voice/incoming<br/>or WebSocket /ws/chat
-    BE->>BE: STT → Transcript
-    BE->>G: Extract intent (crop, location)
-    G-->>BE: {crop: "tomato", intent: "advisory"}
+    F->>FE: Speaks in native language
+    FE->>BE: /api/chat or /ws/chat
+    BE->>G: Multi-turn conversation
+    G-->>BE: Extracts crop, problems, sowing date
+    Note over BE: Turn 2-3: Gemini calls fetch_farm_data
 
-    par Parallel Data Fetch
-        BE->>EE: Sentinel-2 NDVI + SAR Moisture + MODIS LST + SMAP Root-Zone
-        BE->>AM: Fetch mandi prices (112 crops)
+    par Parallel Data Fetch (all at once)
+        BE->>EE: Sentinel-2 (NDVI/EVI/NDWI)
+        BE->>EE: Sentinel-1 SAR (soil moisture)
+        BE->>EE: MODIS Terra (surface temp)
+        BE->>EE: NASA SMAP (root-zone moisture)
+        BE->>AM: Mandi prices + 90-day history
         BE->>WX: 5-day forecast + 90-day historical
+        BE->>GM: Distances + KVK search
     end
 
-    EE-->>BE: NDVI: 0.54, SAR: moist, LST: 31°C, SMAP: adequate
-    AM-->>BE: Best: Bhuntar ₹7500/q
-    WX-->>BE: Rain on Mar 29-30
+    EE-->>BE: NDVI 0.54, SAR moist, LST 31°C, SMAP adequate
+    AM-->>BE: 15 mandis with prices
+    WX-->>BE: Rain Mar 30, 32°C max
+    GM-->>BE: Distances + nearest KVK
 
-    BE->>G: Synthesize advisory
-    G-->>BE: Conversational advice in farmer's language
-    BE->>BE: Fact-check with Flash Lite
-    BE->>T: TTS audio response
-    T->>F: Speaks advisory aloud
+    BE->>BE: Cross-validate sources
+    BE->>BE: Compute net profit (price - transport - commission - spoilage)
+    BE->>BE: Estimate growth stage (GDD)
+    BE->>BE: Score confidence per source
 
-    Note over F,T: Multi-turn: farmer asks follow-up questions
+    BE->>G: All data + cross-validation → synthesize advisory
+    G-->>BE: Personalized advice in farmer's language
+    BE->>BE: Fact-check advisory against source data
+
+    BE->>FE: TTS audio + text response
+    FE->>F: Speaks advisory aloud
+
+    Note over F,FE: Multi-turn: farmer asks follow-ups using same data
+    Note over F,FE: Call ends → Gemini generates summary
 ```
 
 ---
@@ -169,34 +191,46 @@ sequenceDiagram
 - True-color and NDVI-overlay thumbnail images
 
 ### Smart Mandi Price Arbitrage
-- Live prices from **AgMarkNet** (data.gov.in) — 106+ crops
+- Live prices from **AgMarkNet** (data.gov.in) — **112 commodities** cached in GCS
+- **90-day price history** with 7d/30d moving averages, volatility, sell timing signals
 - Real **Google Maps driving distances** to every mandi
 - **Net profit ranking**: Price - Transport (₹3.5/km/quintal) - Commission (4%) - Spoilage
 - Crop-specific **spoilage rates** (tomato 0.5%/hr vs wheat 0.01%/hr)
+- **Price-weather correlation**: detects price spikes after rain/heat events
 - Dual recommendation: **best mandi** (by profit) + **local mandi** (by distance)
 
 ### Growth Stage Intelligence
 - Estimates growth stage from sowing date + **90-day historical temperature data**
 - Calculates **Growing Degree Days (GDD)** from real Open-Meteo data
+- Models for **10 crops**: tomato, wheat, rice, potato, onion, capsicum, cabbage, cauliflower, apple, mango
 - Maps to: Seedling → Vegetative → Flowering → Fruiting → Harvest
 - Weather advisories tailored to current growth stage
 
+### Cross-Validation Engine
+- **Multi-source conflict detection**: compares satellite vs weather vs price data
+- NDVI declining + adequate rain → flags pest/disease, refers to KVK (not irrigation)
+- SAR confirms dry soil + declining NDVI → high-confidence irrigation recommendation
+- MODIS heat stress + growth stage → crop-specific protection advice
+- Rain forecast during harvest stage → urgent harvest-before-rain warning
+- Frost warning during flowering → crop protection alert
+
 ### Anti-Hallucination Guardrails
-- **Gemini Flash Lite fact-checks** every advisory against source data
+- **Gemini fact-checks** every advisory against source data (background verification)
 - Never recommends pesticide brands/dosages — refers to **KVK (1800-180-1551)**
 - Never provides loan/credit/insurance advice
 - All estimates marked **"indicative"** — no yield guarantees
 - Every response cites **data sources with timestamps and freshness**
-- **Audit trail**: session_id, intent, agents called, data sources, advisory snippet
+- **Confidence scoring** per data source (HIGH/MEDIUM/LOW/UNAVAILABLE)
 
-### 2-Tier Persistent Cache
+### 3-Tier Persistent Cache
 
-| Layer | Speed | Persistence | TTL |
-|-------|-------|-------------|-----|
-| L1 (In-memory) | **0.13s** | Lost on restart | Advisory: 15min, NDVI: 6hr |
-| L2 (Cloud Storage) | **~200ms** | Survives deploys | Mandi raw: 1hr, KVK: 30 days |
+| Layer | Speed | Persistence | TTL | Data |
+|-------|-------|-------------|-----|------|
+| L0 (Satellite grid) | **<1ms** | Pre-computed JSON | Recomputed daily | 3,788 points × 4 satellites |
+| L1 (In-memory) | **0.13s** | Lost on restart | Advisory: 15min, NDVI: 6hr | All API responses |
+| L2 (Cloud Storage) | **~200ms** | Survives deploys | Mandi: 1hr, KVK: 30 days | GCS bucket |
 
-Every response includes `data_age_minutes` and `freshness_note`.
+Every response includes `data_age_minutes` and `freshness_note`. 3-way sync between local, GCS, and VM.
 
 ---
 
@@ -204,20 +238,21 @@ Every response includes `data_age_minutes` and `freshness_note`.
 
 | Layer | Technology |
 |-------|-----------|
-| **LLM** | Gemini 3.1 Pro (advisory) + Gemini 3.1 Flash Lite (intent + fact-check) + Gemini Live (voice streaming) |
-| **Satellite** | Google Earth Engine — Sentinel-2, Sentinel-1 SAR, MODIS, NASA SMAP |
-| **Voice** | Cloud Speech-to-Text V2 + Cloud TTS Wavenet/Neural2 |
+| **LLM** | Gemini 3 Flash (advisory + chat + intent + fact-check) with 5-model fallback chain |
+| **Voice Streaming** | Gemini Live (WebSocket, real-time audio ↔ text) |
+| **Satellite** | Google Earth Engine — Sentinel-2 (10m), Sentinel-1 SAR, MODIS Terra (1km), NASA SMAP (9km) |
+| **Voice** | Cloud Speech-to-Text V2 + Cloud TTS Wavenet (10 Indian voices) |
 | **Translation** | Cloud Translation API v3 (22 Indian languages) |
-| **Phone** | Twilio Voice + SMS (outbound calls, TwiML webhooks, SMS summary) |
-| **Frontend** | Next.js 16, TypeScript, React 19, Tailwind CSS |
-| **Backend** | FastAPI, Python 3.12, async/await, uvicorn |
-| **Market Data** | AgMarkNet / data.gov.in (government commodity prices) |
-| **Weather** | Open-Meteo API (5-day forecast + 90-day historical) |
-| **Maps** | Google Maps Geocoding, Distance Matrix, Places APIs |
-| **Cache** | In-memory L1 + Google Cloud Storage L2 |
-| **Deployment** | Docker on VM (kisanmind.dmj.one) |
+| **Phone** | Twilio Voice + SMS (TwiML webhooks, SMS summary after call) |
+| **Frontend** | Next.js 16, TypeScript, React 19, Tailwind CSS 4 (WCAG 2.2 AAA) |
+| **Backend** | FastAPI, Python 3.11+, fully async, uvicorn |
+| **Market Data** | AgMarkNet / data.gov.in (112 commodities, 90-day price history) |
+| **Weather** | Open-Meteo API (5-day forecast + 90-day historical for GDD) |
+| **Maps** | Google Maps Geocoding, Distance Matrix, Places (KVK search) |
+| **Cache** | L0: Pre-computed satellite (O(1)) + L1: In-memory + L2: Cloud Storage |
+| **Deployment** | VM (kisanmind.dmj.one) with systemd + GitHub webhook auto-deploy |
 
-**Google Cloud Services**: Earth Engine, Cloud STT V2, Cloud TTS, Cloud Translation, Cloud Storage
+**Google Cloud Services**: Earth Engine, Cloud STT V2, Cloud TTS, Cloud Translation, Cloud Storage, Vertex AI (fallback)
 
 ---
 
@@ -276,19 +311,25 @@ Languages without native TTS are auto-translated to Hindi for speech synthesis.
 
 ## Data Sources — Zero Fake Data
 
-| Data | Source | Update Frequency | Real-time |
-|------|--------|------------------|-----------|
-| Crop Health (NDVI/EVI/NDWI) | Sentinel-2 via Earth Engine | Weekly (satellite revisit) | Yes (cached 6h) |
-| Soil Moisture (SAR) | Sentinel-1 via Earth Engine | Every 6 days | Yes (cached 6h) |
-| Land Surface Temperature | MODIS Terra (1km daily) | Daily | Yes |
-| Root-Zone Moisture | NASA SMAP (9km) | Every 2-3 days | Yes |
-| Mandi Prices | AgMarkNet / data.gov.in | Daily (government data) | Yes (cached 1h) |
-| Driving Distances | Google Maps Distance Matrix | Real-time | Yes |
-| Weather Forecast | Open-Meteo API | Hourly | Yes |
-| Historical Weather | Open-Meteo (120 days) | Daily | Yes |
-| Advisory Generation | Gemini 3.1 Pro + Flash Lite fact-check | Per request | Yes |
-| Voice I/O | Cloud STT V2 + Cloud TTS | Real-time | Yes |
-| Translation | Cloud Translation API v3 | Real-time | Yes |
+| Data | Source | Resolution | Cache | Update |
+|------|--------|-----------|-------|--------|
+| Crop Health (NDVI/EVI/NDWI) | Sentinel-2 via Earth Engine | 10m | Pre-computed grid (O(1)) | Weekly |
+| Soil Moisture (Radar) | Sentinel-1 SAR C-band (VV/VH) | 10m | Pre-computed grid (O(1)) | Every 6 days |
+| Land Surface Temperature | MODIS Terra MOD11A1 | 1km | Pre-computed grid (O(1)) | Daily |
+| Root-Zone Moisture (0–100cm) | NASA SMAP L4 | 9km | Pre-computed grid (O(1)) | Every 2-3 days |
+| NDVI Trajectory + Benchmark | Sentinel-2 time series | 10m | Live EE (background) | Per request |
+| Mandi Prices (112 commodities) | AgMarkNet / data.gov.in | Per mandi | GCS bucket (1h TTL) | Daily |
+| 90-Day Price History | AgMarkNet historical | Per commodity | GCS bucket (24h TTL) | Daily |
+| Price-Weather Correlation | Computed from prices + Open-Meteo | Per commodity | GCS bucket | Daily |
+| Driving Distances | Google Maps Distance Matrix | Per mandi | Per request | Real-time |
+| 5-Day Weather Forecast | Open-Meteo API | Hyperlocal | Per request | Hourly |
+| 90-Day Historical Weather (GDD) | Open-Meteo Archive API | Per location | Per request | Daily |
+| Cross-Validation Findings | Multi-source conflict detection | Per advisory | Per request | Real-time |
+| Growth Stage (GDD) | Computed from weather + crop model | 10 crops | Per request | Real-time |
+| Nearest KVK | Google Places API | 100km radius | L1/L2 (30d TTL) | Cached |
+| Advisory Synthesis | Gemini 3 Flash (5-model fallback) | Per request | L1/L2 (15min TTL) | Real-time |
+| Voice I/O | Cloud STT V2 + Cloud TTS Wavenet | 22 languages | — | Real-time |
+| Translation | Cloud Translation API v3 | 22 languages | — | Real-time |
 
 ---
 
