@@ -274,7 +274,7 @@ async def _call_gemini_synthesis(prompt: str) -> str:
     try:
         client = genai.Client()
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-pro",
+            model="gemini-3.1-pro",
             contents=prompt,
         )
         return response.text or ""
@@ -313,7 +313,7 @@ def _get_advisory_tool(user_message: str, latitude: float, longitude: float,
 # Build the ADK root agent
 root_agent = Agent(
     name="kisanmind_brain",
-    model="gemini-2.5-pro",
+    model="gemini-3.1-pro",
     description="KisanMind Brain: Root orchestrator for agricultural advisory",
     instruction=GUARDRAIL_SYSTEM_PROMPT,
     tools=[_get_advisory_tool],
