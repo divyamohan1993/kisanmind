@@ -60,6 +60,7 @@ export default function TalkPage() {
   const silenceCountRef = useRef(0);
   const advisoryDeliveredRef = useRef(false);
   const [callSummary, setCallSummary] = useState("");
+  const [geminiError, setGeminiError] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const geo = useGeolocation();
   const geoRef = useRef(geo);
@@ -133,13 +134,14 @@ export default function TalkPage() {
         const cd = await cr.json();
         setCallState("speaking");
         const clean = stripMarkdown(cd.response); const cleanEn = stripMarkdown(cd.response_en || cd.response);
+        if (clean.includes("Technical issue") || clean.includes("Gemini AI may be overloaded")) setGeminiError(true);
         const kind = cd.has_advisory ? "advisory" : "conversation";
         if (cd.has_advisory) advisoryDeliveredRef.current = true;
         addMsg("kisanmind", clean, kind, cleanEn);
         if (cd.has_advisory) { try { const b = await fetch(`${API_BASE}/api/beep`); if (b.ok) { const bd = await b.json(); const beep = new Audio(`data:audio/wav;base64,${bd.audio_base64}`); await beep.play(); await waitForAudioEnd(beep); } } catch {} }
         const ra = await playTTS(clean, lang()); currentAudioRef.current = ra; await waitForAudioEnd(ra);
         if (cd.call_complete) { callActiveRef.current = false; setCallState("ended"); return; }
-      } catch { addMsg("kisanmind", "Technical issue. Gemini AI may be overloaded — please try again in a moment.", "status", "Technical issue. Gemini AI may be overloaded — please try again in a moment."); }
+      } catch { setGeminiError(true); addMsg("kisanmind", "Technical issue. Gemini AI may be overloaded — please try again in a moment.", "status", "Technical issue. Gemini AI may be overloaded — please try again in a moment."); }
     }
   }, [listenOnce, addMsg]);
 
@@ -223,6 +225,13 @@ export default function TalkPage() {
         </div>
         <div className="absolute bottom-0 left-0 right-0 h-1.5" style={{ background: "linear-gradient(90deg, #FF9933 33%, #fff 33%, #fff 66%, #138808 66%)" }} />
       </header>
+
+      {/* Gemini overload banner */}
+      {geminiError && (
+        <div className="bg-red-600 text-white text-center py-3 px-4 text-sm font-medium">
+          Gemini AI is currently overloaded. Please try again after some time. We do not know when Gemini will be back.
+        </div>
+      )}
 
       <main className="max-w-4xl mx-auto px-4 py-6">
         {/* Pre-call: Project info + Call button */}
