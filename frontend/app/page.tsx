@@ -1,754 +1,347 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
-import {
-  Satellite,
-  TrendingUp,
-  CloudSun,
-  Store,
-  Leaf,
-  Search,
-  AlertCircle,
-  Phone,
-  ShieldCheck,
-  Info,
-} from "lucide-react";
-import SatelliteMap from "./components/SatelliteMap";
-import NDVIChart from "./components/NDVIChart";
-import MandiComparison from "./components/MandiComparison";
-import VoiceInput from "./components/VoiceInput";
-import WeatherTimeline from "./components/WeatherTimeline";
-import AdvisoryCard from "./components/AdvisoryCard";
-import type { Advisory } from "./components/AdvisoryCard";
-import type { ForecastDay } from "./components/WeatherTimeline";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { Phone, PhoneOff, Mic, Volume2 } from "lucide-react";
 import useGeolocation from "./hooks/useGeolocation";
+
+const LANGUAGES = [
+  { code: "hi", label: "हिन्दी" }, { code: "en", label: "English" },
+  { code: "ta", label: "தமிழ்" }, { code: "te", label: "తెలుగు" },
+  { code: "bn", label: "বাংলা" }, { code: "mr", label: "मराठी" },
+  { code: "gu", label: "ગુજરાતી" }, { code: "kn", label: "ಕನ್ನಡ" },
+  { code: "ml", label: "മലയാളം" }, { code: "pa", label: "ਪੰਜਾਬੀ" },
+];
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
-interface ApiResponse {
-  location?: { location_name?: string; state?: string };
-  crop?: string;
-  mandi_prices?: Array<{
-    market: string;
-    modal_price: number;
-    distance_km: number;
-    net_profit_per_quintal: number;
-    transport_cost_per_quintal?: number;
-    commission_per_quintal?: number;
-  }>;
-  best_mandi?: { market: string; modal_price: number; distance_km: number; net_profit_per_quintal?: number };
-  local_mandi?: { market: string; modal_price: number };
-  weather?: {
-    daily_forecast?: Array<{
-      date: string;
-      max_temp_c: number;
-      min_temp_c: number;
-      precipitation_mm: number;
-      condition?: string;
-      humidity?: number;
-      wind_kph?: number;
-    }>;
-    summary?: string;
-  };
-  satellite?: {
-    ndvi?: number;
-    health?: string;
-    trend?: string;
-    true_color_url?: string;
-    ndvi_color_url?: string;
-  };
-  advisory?: string;
-  sources?: Record<string, unknown>;
-  error?: string;
-  price_trend?: {
-    direction?: string;
-    percentage?: number;
-    period_days?: number;
-  };
-  growth_stage?: {
-    stage?: string;
-    days_since_sowing?: number;
-    confidence?: string;
-  };
-  confidence?: string;
-  nearest_kvk?: {
-    name?: string;
-    distance_km?: number;
-    phone?: string;
-    district?: string;
-  };
-  cross_validation?: Array<{
-    type: string;
-    message: string;
-    source?: string;
-  }>;
-  satellite_extras?: {
-    sar?: {
-      moisture_class?: string;
-      backscatter_db?: number;
-    };
-    lst?: {
-      surface_temp_c?: number;
-      heat_stress?: string;
-    };
-    smap?: {
-      rootzone_class?: string;
-      soil_moisture?: number;
-    };
-  };
-  ndvi_trajectory?: {
-    trajectory?: string;
-    benchmark_comparison?: string;
-  };
-  spoilage?: {
-    is_perishable?: boolean;
-    spoilage_loss_per_quintal?: number;
-    transit_hours?: number;
-    shelf_life_days?: number;
-  };
+interface ChatMessage { type: "farmer" | "kisanmind"; text: string; text_en: string; timestamp: Date; kind?: "conversation" | "advisory" | "status"; }
+type CallState = "pre-call" | "connecting" | "listening" | "processing" | "speaking" | "ended";
+
+function stripMarkdown(t: string): string {
+  return t.replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*(.+?)\*/g, '$1').replace(/#{1,6}\s*/g, '').replace(/`(.+?)`/g, '$1').replace(/CALL_COMPLETE:\s*/g, '').trim();
 }
 
-function mapApiToState(api: ApiResponse) {
-  const locationName = api.location
-    ? `${api.location.location_name || "Unknown"}, ${api.location.state || ""}`
-    : "Unknown";
-
-  // Build satellite data — prefer structured satellite response, fall back to parsing advisory text
-  const satNdvi = api.satellite?.ndvi;
-  const ndviFromText = api.advisory?.match(/NDVI[:\s]*([0-9.]+)/i);
-  const ndviValue = satNdvi != null ? satNdvi : ndviFromText ? parseFloat(ndviFromText[1]) : undefined;
-  const ndviStatus: "healthy" | "moderate" | "stressed" | undefined =
-    ndviValue != null ? (ndviValue >= 0.6 ? "healthy" : ndviValue >= 0.3 ? "moderate" : "stressed") : undefined;
-  const trueColorUrl = api.satellite?.true_color_url;
-  const ndviColorUrl = api.satellite?.ndvi_color_url;
-
-  // Map mandi data
-  const bestMandi = api.best_mandi;
-  const mandiChartData = (api.mandi_prices || []).map((m) => ({
-    name: m.market,
-    netProfit: m.net_profit_per_quintal || 0,
-    price: m.modal_price,
-    transport: m.transport_cost_per_quintal || 0,
-    commission: m.commission_per_quintal || 0,
-    distance: m.distance_km,
-  }));
-
-  // Map weather forecast
-  const forecastDays: ForecastDay[] = (api.weather?.daily_forecast || []).map(
-    (d, i) => {
-      const dayLabels = ["Today", "Tomorrow", "Day 3", "Day 4", "Day 5"];
-      const cond = (d.condition || "").toLowerCase();
-      const icon: ForecastDay["icon"] = cond.includes("rain")
-        ? "rain"
-        : cond.includes("cloud") || cond.includes("partly") || cond.includes("overcast")
-        ? "cloud"
-        : cond.includes("snow")
-        ? "snow"
-        : "sun";
-      return {
-        day: dayLabels[i] || `Day ${i + 1}`,
-        date: d.date,
-        icon,
-        tempHigh: d.max_temp_c,
-        tempLow: d.min_temp_c,
-        humidity: d.humidity ?? 50,
-        rain_mm: d.precipitation_mm,
-        windSpeed: d.wind_kph ?? 0,
-        condition: d.condition,
-      };
-    }
-  );
-
-  // Get current weather from first forecast day
-  const today = api.weather?.daily_forecast?.[0];
-  const currentWeather = today
-    ? {
-        temp: today.max_temp_c,
-        humidity: today.humidity ?? 50,
-        condition: today.condition || "Clear",
-      }
-    : { temp: 0, humidity: 0, condition: "--" };
-
-  // Parse advisory into action items
-  const advisories: Advisory[] = [];
-  if (api.advisory) {
-    // Simple heuristic: split advisory into sentences and classify
-    const sentences = api.advisory.split(/[.।]+/).filter((s) => s.trim().length > 10);
-    for (const s of sentences.slice(0, 4)) {
-      const lower = s.toLowerCase();
-      const isDont = lower.includes("do not") || lower.includes("avoid") || lower.includes("mat") || lower.includes("na ") || lower.includes("don't") || lower.includes("nahi");
-      const isWarning = lower.includes("risk") || lower.includes("warn") || lower.includes("alert") || lower.includes("khatr") || lower.includes("savdhan");
-      advisories.push({
-        type: isDont ? "dont" : isWarning ? "warning" : "do",
-        title: s.trim().slice(0, 80),
-        description: s.trim(),
-        urgency: isDont || isWarning ? "high" : "medium",
-      });
-    }
-  }
-
-  return {
-    location: locationName,
-    crop: api.crop || "Tomato",
-    satellite: { ndvi: ndviValue, status: ndviStatus, trend: "stable" as const, trueColorUrl, ndviColorUrl },
-    mandi: {
-      bestMandi: bestMandi?.market || "N/A",
-      bestPrice: bestMandi?.modal_price || 0,
-    },
-    weather: { current: currentWeather },
-    advisories,
-    combinedAdvisory: api.advisory || "",
-    combinedAdvisoryEn: api.advisory || "",
-    mandiChartData,
-    forecastDays,
-    // v2 fields
-    priceTrend: api.price_trend,
-    growthStage: api.growth_stage,
-    confidence: api.confidence,
-    nearestKvk: api.nearest_kvk,
-    crossValidation: api.cross_validation,
-    satelliteExtras: api.satellite_extras,
-    ndviTrajectory: api.ndvi_trajectory,
-    spoilage: api.spoilage,
-  };
+async function playTTS(text: string, language: string): Promise<HTMLAudioElement | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, language }) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.audio_base64) return null;
+    const audio = new Audio(`data:audio/mp3;base64,${data.audio_base64}`);
+    audio.play();
+    return audio;
+  } catch { return null; }
 }
 
-export default function Dashboard() {
+function waitForAudioEnd(audio: HTMLAudioElement | null): Promise<void> {
+  if (!audio) return Promise.resolve();
+  return new Promise((resolve) => { audio.onended = () => resolve(); audio.onerror = () => resolve(); });
+}
+
+export default function TalkPage() {
+  const [language, setLanguage] = useState("hi");
+  useEffect(() => { const s = localStorage.getItem("kisanmind_lang"); if (s) setLanguage(s); }, []);
+  const setLang = (l: string) => { setLanguage(l); localStorage.setItem("kisanmind_lang", l); };
+
+  const [callState, setCallState] = useState<CallState>("pre-call");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [liveText, setLiveText] = useState("");
+  const [showLang, setShowLang] = useState(false);
+
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const callActiveRef = useRef(false);
+  const sessionIdRef = useRef("");
+  const silenceCountRef = useRef(0);
+  const advisoryDeliveredRef = useRef(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
   const geo = useGeolocation();
-  const [data, setData] = useState<ReturnType<typeof mapApiToState> | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [searchLocation, setSearchLocation] = useState("");
-  const [searchCrop, setSearchCrop] = useState("");
-  const [showEnglish, setShowEnglish] = useState(false);
-  const [hasFetched, setHasFetched] = useState(false);
-  const [loadingStep, setLoadingStep] = useState(0);
 
-  // Loading step labels shown during initial fetch
-  const LOADING_STEPS = [
-    { label: "Detecting your location...", icon: "pin" },
-    { label: "Fetching mandi prices from AgMarkNet...", icon: "mandi" },
-    { label: "Getting 5-day weather forecast...", icon: "weather" },
-    { label: "Analyzing satellite crop health...", icon: "satellite" },
-    { label: "Generating personalized advisory...", icon: "advisory" },
-  ];
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
-  const fetchAdvisory = useCallback(
-    async (text?: string, language?: string) => {
-      setIsLoading(true);
-      setError(null);
-      setLoadingStep(0);
-      // Animate through loading steps to show progress
-      const stepTimer = setInterval(() => {
-        setLoadingStep((prev) => (prev < 4 ? prev + 1 : prev));
-      }, 2500);
-      try {
-        const body: Record<string, unknown> = {
-          crop: searchCrop || "Tomato",
-          intent: text || "full advisory",
-          language: language || "hi-IN",
-        };
-        if (searchLocation) {
-          body.location = searchLocation;
-        }
-        if (geo.latitude && geo.longitude) {
-          body.latitude = geo.latitude;
-          body.longitude = geo.longitude;
-        }
-
-        // Fire advisory and NDVI requests in parallel
-        const advisoryPromise = fetch(`${API_BASE}/api/advisory`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-
-        const ndviBody = {
-          latitude: body.latitude as number | undefined,
-          longitude: body.longitude as number | undefined,
-        };
-        const ndviPromise = fetch(`${API_BASE}/api/ndvi`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(ndviBody),
-        }).catch(() => null); // NDVI is optional — don't fail advisory if it errors
-
-        const [res, ndviRes] = await Promise.all([advisoryPromise, ndviPromise]);
-
-        if (!res.ok) {
-          const errBody = await res.json().catch(() => ({}));
-          throw new Error(errBody.error || `Request failed (${res.status})`);
-        }
-
-        const result: ApiResponse = await res.json();
-        if (result.error) {
-          throw new Error(result.error);
-        }
-
-        // Merge NDVI satellite URLs into result if advisory didn't already have them
-        if (ndviRes && ndviRes.ok) {
-          try {
-            const ndviData = await ndviRes.json();
-            if (!result.satellite) {
-              result.satellite = {};
-            }
-            if (ndviData.true_color_url && !result.satellite.true_color_url) {
-              result.satellite.true_color_url = ndviData.true_color_url;
-            }
-            if (ndviData.ndvi_color_url && !result.satellite.ndvi_color_url) {
-              result.satellite.ndvi_color_url = ndviData.ndvi_color_url;
-            }
-            if (ndviData.ndvi != null && result.satellite.ndvi == null) {
-              result.satellite.ndvi = ndviData.ndvi;
-            }
-            if (ndviData.health && !result.satellite.health) {
-              result.satellite.health = ndviData.health;
-            }
-            if (ndviData.trend && !result.satellite.trend) {
-              result.satellite.trend = ndviData.trend;
-            }
-          } catch {
-            // ignore NDVI parse errors
-          }
-        }
-
-        clearInterval(stepTimer);
-        setData(mapApiToState(result));
-        setHasFetched(true);
-      } catch (err) {
-        clearInterval(stepTimer);
-        setError(err instanceof Error ? err.message : "Failed to fetch advisory");
-      }
-      setIsLoading(false);
-    },
-    [searchLocation, searchCrop, geo.latitude, geo.longitude]
-  );
-
-  // Auto-fetch on first load once geo is ready
+  // Re-translate messages on language change
   useEffect(() => {
-    if (!geo.loading && !hasFetched && !isLoading) {
-      fetchAdvisory();
+    if (messages.length === 0) return;
+    if (language === "en") { setMessages(prev => prev.map(m => ({ ...m, text: m.text_en }))); return; }
+    fetch(`${API_BASE}/api/translate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ texts: messages.map(m => m.text_en), target_language: language }) })
+      .then(r => r.json()).then(d => { if (d.translated?.length === messages.length) setMessages(prev => prev.map((m, i) => ({ ...m, text: d.translated[i] }))); }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language]);
+
+  const addMsg = useCallback((type: "farmer" | "kisanmind", text: string, kind?: "conversation" | "advisory" | "status", textEn?: string) => {
+    setMessages(prev => [...prev, { type, text, text_en: textEn || text, timestamp: new Date(), kind }]);
+  }, []);
+
+  // Listen using Chrome Web Speech API
+  const listenOnce = useCallback(async (): Promise<string> => {
+    if (!callActiveRef.current) return "";
+    setCallState("listening"); setLiveText("");
+    const langMap: Record<string, string> = { hi: "hi-IN", en: "en-IN", ta: "ta-IN", te: "te-IN", bn: "bn-IN", mr: "mr-IN", gu: "gu-IN", kn: "kn-IN", ml: "ml-IN", pa: "pa-IN" };
+    return new Promise((resolve) => {
+      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (!SR) { resolve(""); return; }
+      const rec = new SR();
+      rec.lang = langMap[language] || "hi-IN"; rec.continuous = false; rec.interimResults = true;
+      let final = ""; let to: ReturnType<typeof setTimeout>;
+      rec.onresult = (e: any) => {
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) { if (e.results[i].isFinal) final += e.results[i][0].transcript + " "; else interim += e.results[i][0].transcript; }
+        setLiveText(final + interim);
+        clearTimeout(to); to = setTimeout(() => rec.stop(), 3000);
+      };
+      rec.onerror = () => { clearTimeout(to); resolve(final.trim()); };
+      rec.onend = () => { clearTimeout(to); setLiveText(""); resolve(final.trim()); };
+      rec.start();
+      to = setTimeout(() => rec.stop(), 8000);
+      const ci = setInterval(() => { if (!callActiveRef.current) { clearInterval(ci); rec.stop(); } }, 500);
+      rec.onend = () => { clearTimeout(to); clearInterval(ci); setLiveText(""); resolve(final.trim()); };
+    });
+  }, [language]);
+
+  // Multi-turn conversation
+  const conversationLoop = useCallback(async () => {
+    setCallState("processing");
+    try {
+      const g = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: "Hello, I need farming advice.", language, latitude: geo.latitude || 0, longitude: geo.longitude || 0 }) });
+      const gd = await g.json(); sessionIdRef.current = gd.session_id || sessionIdRef.current;
+      setCallState("speaking"); addMsg("kisanmind", stripMarkdown(gd.response), "conversation", stripMarkdown(gd.response_en || gd.response));
+      const ga = await playTTS(gd.response, language); await waitForAudioEnd(ga);
+    } catch { addMsg("kisanmind", "Connection issue.", "status", "Connection issue."); callActiveRef.current = false; setCallState("ended"); return; }
+
+    while (callActiveRef.current) {
+      const transcript = await listenOnce();
+      if (!transcript.trim()) { silenceCountRef.current++; if (silenceCountRef.current >= 3) { callActiveRef.current = false; setCallState("ended"); return; } continue; }
+      silenceCountRef.current = 0;
+      addMsg("farmer", transcript, "conversation", transcript);
+      setCallState("processing");
+
+      // Speak trivia on first data fetch
+      let triviaDone = false;
+      if (!advisoryDeliveredRef.current) {
+        (async () => {
+          try {
+            const tr = await fetch(`${API_BASE}/api/trivia`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ crop: transcript, language }) });
+            const td = await tr.json();
+            for (const fact of (td.trivia || [])) {
+              if (triviaDone || !callActiveRef.current) break;
+              setCallState("speaking"); addMsg("kisanmind", fact, "status", fact);
+              const fa = await playTTS(fact, language); await waitForAudioEnd(fa);
+            }
+          } catch {}
+        })();
+      }
+
+      try {
+        const cr = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: transcript, language, latitude: geo.latitude || 0, longitude: geo.longitude || 0 }) });
+        triviaDone = true; const cd = await cr.json();
+        setCallState("speaking");
+        const clean = stripMarkdown(cd.response); const cleanEn = stripMarkdown(cd.response_en || cd.response);
+        const kind = cd.has_advisory ? "advisory" : "conversation";
+        if (cd.has_advisory) advisoryDeliveredRef.current = true;
+        addMsg("kisanmind", clean, kind, cleanEn);
+        if (cd.has_advisory) { try { const b = await fetch(`${API_BASE}/api/beep`); if (b.ok) { const bd = await b.json(); const beep = new Audio(`data:audio/wav;base64,${bd.audio_base64}`); await beep.play(); await waitForAudioEnd(beep); } } catch {} }
+        const ra = await playTTS(clean, language); currentAudioRef.current = ra; await waitForAudioEnd(ra);
+        if (cd.call_complete || cd.has_advisory) { callActiveRef.current = false; setCallState("ended"); return; }
+      } catch { triviaDone = true; addMsg("kisanmind", "Technical issue.", "status", "Technical issue."); }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [geo.loading]);
+  }, [language, geo.latitude, geo.longitude, listenOnce, addMsg]);
+
+  const startCall = useCallback(async () => {
+    callActiveRef.current = true; silenceCountRef.current = 0; sessionIdRef.current = ""; advisoryDeliveredRef.current = false;
+    setMessages([]); setCallState("connecting"); await conversationLoop();
+  }, [conversationLoop]);
+
+  const endCall = useCallback(() => {
+    callActiveRef.current = false; currentAudioRef.current?.pause(); currentAudioRef.current = null;
+    setCallState("ended"); setLiveText("");
+  }, []);
+
+  const isInCall = !["pre-call", "ended"].includes(callState);
+  const advisoryMsgs = messages.filter(m => m.kind === "advisory");
+  const farmerMsgs = messages.filter(m => m.type === "farmer");
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
-      {/* Voice-First Banner */}
-      <a
-        href="/talk"
-        className="group mb-8 flex items-center gap-4 rounded-2xl border-2 border-healthy/30 bg-gradient-to-r from-healthy/10 via-healthy/5 to-transparent p-5 sm:p-6 transition-all hover:border-healthy/50 hover:shadow-[0_0_40px_rgba(34,197,94,0.15)] active:scale-[0.99]"
-      >
-        <div className="flex h-16 w-16 sm:h-20 sm:w-20 shrink-0 items-center justify-center rounded-full bg-healthy/20 text-3xl sm:text-4xl group-hover:bg-healthy/30 transition-colors pulse-ring">
-          🎤
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-xl sm:text-2xl font-bold text-white leading-tight">
-            किसान भाई, यहाँ टैप करें
-          </div>
-          <div className="text-base sm:text-lg text-healthy mt-1">
-            बोलकर सलाह पाएं — Tap here, speak and get advice
-          </div>
-          <div className="text-xs text-white/40 mt-1">
-            Voice-first advisory in 22 Indian languages
-          </div>
-        </div>
-        <div className="hidden sm:flex h-12 w-12 items-center justify-center rounded-full bg-healthy text-kisan-dark text-xl font-bold">
-          →
-        </div>
-      </a>
+    <div className="min-h-screen bg-[#fafafa] text-gray-900" style={{ fontFamily: "'Inter', sans-serif" }}>
+      {/* Tricolor strip */}
+      <div className="flex h-1.5"><div className="flex-1 bg-[#FF9933]" /><div className="flex-1 bg-white" /><div className="flex-1 bg-[#138808]" /></div>
 
-      {/* Hero */}
-      <div className="mb-8">
-        <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-              <span className="gradient-text">Farm Intelligence</span>
-            </h1>
-            <p className="mt-1 text-sm text-white/40">
-              Satellite + Weather + Mandi = Smart Farming Decisions
-            </p>
-          </div>
-          <div className="flex items-center gap-2 text-xs text-white/40">
-            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-healthy" />
-            {data ? `Live Data -- ${data.location}` : "Loading..."}
-          </div>
+      {/* Header */}
+      <header className="bg-[#1a365d] text-white py-6 relative">
+        <div className="max-w-4xl mx-auto px-4 text-center">
+          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">🌾 KisanMind</h1>
+          <p className="text-sm opacity-80 mt-1">AI Krishi Salahkaar Seva | आत्मनिर्भर भारत</p>
         </div>
+        <div className="absolute bottom-0 left-0 right-0 h-1.5" style={{ background: "linear-gradient(90deg, #FF9933 33%, #fff 33%, #fff 66%, #138808 66%)" }} />
+      </header>
 
-        {/* Search bar */}
-        <div className="mb-6 flex flex-col gap-3 sm:flex-row">
-          <div className="relative flex-1">
-            <Search
-              size={16}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30"
-            />
-            <input
-              type="text"
-              placeholder="Location (e.g., Solan, Coorg, Punjab)"
-              value={searchLocation}
-              onChange={(e) => setSearchLocation(e.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-white/5 py-3 pl-10 pr-4 text-sm text-white placeholder-white/30 outline-none transition-colors focus:border-healthy/40"
-            />
-          </div>
-          <div className="relative flex-1">
-            <Leaf
-              size={16}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30"
-            />
-            <input
-              type="text"
-              placeholder="Crop (e.g., Tomato, Wheat, Coffee)"
-              value={searchCrop}
-              onChange={(e) => setSearchCrop(e.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-white/5 py-3 pl-10 pr-4 text-sm text-white placeholder-white/30 outline-none transition-colors focus:border-healthy/40"
-            />
-          </div>
-          <button
-            onClick={() => fetchAdvisory()}
-            disabled={isLoading}
-            className="flex items-center justify-center gap-2 rounded-xl bg-healthy px-6 py-3 text-sm font-semibold text-kisan-dark transition-all hover:bg-healthy/90 disabled:opacity-50"
-          >
-            {isLoading ? (
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-kisan-dark border-t-transparent" />
-            ) : (
-              <Satellite size={16} />
-            )}
-            Analyze
-          </button>
-        </div>
+      <main className="max-w-4xl mx-auto px-4 py-6">
+        {/* Pre-call: Project info + Call button */}
+        {callState === "pre-call" && !advisoryMsgs.length && (
+          <>
+            {/* Call CTA */}
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6 text-center">
+              <p className="text-gray-600 text-sm mb-4">Satellite + Mandi + Mausam = Smart Farming Decisions</p>
 
-        {/* Error Banner */}
-        {error && (
-          <div className="mb-6 flex items-center gap-3 rounded-xl border border-stressed/30 bg-stressed/10 px-4 py-3 text-sm text-stressed">
-            <AlertCircle size={18} />
-            <span>{error}</span>
-            <button
-              onClick={() => fetchAdvisory()}
-              className="ml-auto rounded-lg bg-stressed/20 px-3 py-1 text-xs font-medium hover:bg-stressed/30"
-            >
-              Retry
-            </button>
-          </div>
+              {/* Language selector */}
+              <div className="flex flex-wrap justify-center gap-2 mb-6">
+                {LANGUAGES.map(l => (
+                  <button key={l.code} onClick={() => setLang(l.code)}
+                    className={`px-3 py-1.5 rounded text-sm border ${language === l.code ? "bg-[#138808] text-white border-[#138808]" : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"}`}>
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+
+              <button onClick={startCall}
+                className="inline-flex items-center gap-3 px-10 py-4 rounded-lg bg-[#138808] text-white text-lg font-bold shadow-lg hover:bg-[#0f6d06] active:scale-95 transition-transform">
+                <Phone size={24} /> Call KisanMind
+              </button>
+              <p className="text-xs text-gray-400 mt-3">Tap to speak with your AI farming advisor in your language</p>
+            </div>
+
+            {/* Data sources — visible on desktop */}
+            <div className="hidden md:grid grid-cols-3 gap-4 mb-6">
+              <div className="bg-white rounded-lg border border-gray-200 p-4">
+                <h3 className="font-semibold text-[#1a365d] text-sm mb-2">🛰 Satellite Data</h3>
+                <ul className="text-xs text-gray-500 space-y-1">
+                  <li>Sentinel-2 — Crop health (NDVI)</li>
+                  <li>Sentinel-1 SAR — Soil moisture</li>
+                  <li>MODIS Terra — Surface temperature</li>
+                  <li>NASA SMAP — Root zone moisture</li>
+                </ul>
+              </div>
+              <div className="bg-white rounded-lg border border-gray-200 p-4">
+                <h3 className="font-semibold text-[#1a365d] text-sm mb-2">📊 Mandi Prices</h3>
+                <ul className="text-xs text-gray-500 space-y-1">
+                  <li>AgMarkNet — Govt. of India live data</li>
+                  <li>106 crops cached daily</li>
+                  <li>Net profit after transport + commission</li>
+                  <li>Best mandi recommendation</li>
+                </ul>
+              </div>
+              <div className="bg-white rounded-lg border border-gray-200 p-4">
+                <h3 className="font-semibold text-[#1a365d] text-sm mb-2">🌤 Weather</h3>
+                <ul className="text-xs text-gray-500 space-y-1">
+                  <li>Open-Meteo — 5 day forecast</li>
+                  <li>Rain alerts with dates</li>
+                  <li>Temperature & humidity</li>
+                  <li>Crop-specific action items</li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Project info card */}
+            <div className="bg-white rounded-lg border border-gray-200 p-4 text-xs text-gray-500">
+              <p><strong>KisanMind</strong> uses AI + real satellite data to give personalized farming advice to 150M+ Indian farmers in 22 languages. Voice-first, designed for farmers in the field.</p>
+              <p className="mt-2">Data: ESA Sentinel-2, Sentinel-1 SAR, NASA SMAP, MODIS Terra, AgMarkNet, Open-Meteo | AI: Google Gemini | 22 Indian languages | KVK referral network</p>
+            </div>
+          </>
         )}
 
-        {/* Loading progress indicator */}
-        {isLoading && !data ? (
-          <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-kisan-dark-2 p-6 sm:p-8">
-            <div className="mb-4 text-sm font-medium text-white/60">Loading real data...</div>
-            <div className="space-y-3">
-              {LOADING_STEPS.map((s, i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-all duration-500 ${
-                    i < loadingStep ? "bg-healthy/20" : i === loadingStep ? "bg-healthy/30 ring-2 ring-healthy/40" : "bg-white/5"
+        {/* In-call: Chat interface */}
+        {(isInCall || (callState === "ended" && messages.length > 0)) && (
+          <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+            {/* Call header */}
+            <div className="bg-[#1a365d] text-white px-4 py-2 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm">
+                {isInCall && <span className="h-2 w-2 rounded-full bg-red-400 animate-pulse" />}
+                <span>KisanMind</span>
+                {callState === "listening" && <Mic size={12} className="text-green-300 animate-pulse" />}
+              </div>
+              <button onClick={() => setShowLang(!showLang)} className="text-xs text-white/70 hover:text-white">
+                {LANGUAGES.find(l => l.code === language)?.label}
+              </button>
+            </div>
+
+            {showLang && (
+              <div className="bg-gray-50 px-4 py-2 flex flex-wrap gap-1 border-b">
+                {LANGUAGES.map(l => (
+                  <button key={l.code} onClick={() => { setLang(l.code); setShowLang(false); }}
+                    className={`px-2 py-1 rounded text-xs ${language === l.code ? "bg-[#138808] text-white" : "bg-white text-gray-600 border border-gray-200"}`}>
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Messages */}
+            <div className="p-4 space-y-3 max-h-[60vh] overflow-y-auto bg-gray-50">
+              {messages.filter(m => m.kind !== "status" || !advisoryDeliveredRef.current).map((msg, i) => (
+                <div key={i} className={`flex ${msg.type === "farmer" ? "justify-end" : "justify-start"}`}>
+                  <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm leading-relaxed ${
+                    msg.type === "farmer" ? "bg-[#1a365d] text-white"
+                    : msg.kind === "advisory" ? "bg-white border-l-4 border-[#138808] shadow-sm text-gray-900"
+                    : msg.kind === "status" ? "bg-gray-100 text-gray-500 text-xs italic"
+                    : "bg-white text-gray-800 shadow-sm border border-gray-100"
                   }`}>
-                    {i < loadingStep ? (
-                      <svg className="h-3.5 w-3.5 text-healthy" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
-                    ) : i === loadingStep ? (
-                      <div className="h-2.5 w-2.5 rounded-full bg-healthy animate-pulse" />
-                    ) : (
-                      <div className="h-2 w-2 rounded-full bg-white/20" />
-                    )}
+                    {msg.text}
                   </div>
-                  <span className={`text-sm transition-colors duration-500 ${
-                    i < loadingStep ? "text-healthy/70" : i === loadingStep ? "text-white/90 font-medium" : "text-white/30"
-                  }`}>{s.label}</span>
                 </div>
               ))}
-            </div>
-            <div className="mt-5 h-1.5 w-full rounded-full bg-white/5 overflow-hidden">
-              <div className="h-full rounded-full bg-gradient-to-r from-healthy to-sky transition-all duration-700 ease-out" style={{ width: `${((loadingStep + 1) / LOADING_STEPS.length) * 100}%` }} />
-            </div>
-          </div>
-        ) : (
-          <SatelliteMap
-            location={data?.location || "Loading..."}
-            ndvi={data?.satellite.ndvi ?? 0}
-            status={data?.satellite.status ?? "moderate"}
-            imageUrl={data?.satellite.trueColorUrl}
-          />
-        )}
-        {/* Satellite Extras Pills */}
-        {data?.satelliteExtras && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {data.satelliteExtras.sar?.moisture_class && (
-              <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border ${
-                data.satelliteExtras.sar.moisture_class.toLowerCase().includes("moist") || data.satelliteExtras.sar.moisture_class.toLowerCase().includes("wet")
-                  ? "bg-sky/10 border-sky/20 text-sky" : "bg-amber-500/10 border-amber-500/20 text-amber-400"
-              }`}>
-                <Satellite size={12} />
-                SAR Soil: {data.satelliteExtras.sar.moisture_class}
-              </span>
-            )}
-            {data.satelliteExtras.lst?.surface_temp_c != null && (
-              <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border ${
-                data.satelliteExtras.lst.heat_stress === "high" || data.satelliteExtras.lst.heat_stress === "extreme"
-                  ? "bg-stressed/10 border-stressed/20 text-stressed" : "bg-moderate/10 border-moderate/20 text-moderate"
-              }`}>
-                Surface: {data.satelliteExtras.lst.surface_temp_c}°C
-                {data.satelliteExtras.lst.heat_stress && ` (${data.satelliteExtras.lst.heat_stress})`}
-              </span>
-            )}
-            {data.satelliteExtras.smap?.rootzone_class && (
-              <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border bg-sky/10 border-sky/20 text-sky">
-                Root Zone: {data.satelliteExtras.smap.rootzone_class}
-              </span>
-            )}
-          </div>
-        )}
-      </div>
 
-      {/* Stat Cards */}
-      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="glass-card glass-card-hover glow-green p-5">
-          <div className="mb-3 flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-healthy/10">
-              <TrendingUp size={16} className="text-healthy" />
-            </div>
-            <span className="text-xs font-medium uppercase tracking-wider text-white/40">
-              NDVI Index
-            </span>
-          </div>
-          {isLoading && !data ? (
-            <div className="h-9 w-20 rounded-lg shimmer" />
-          ) : (
-            <>
-              <div className="text-3xl font-bold tabular-nums text-healthy">
-                {(data?.satellite.ndvi ?? 0).toFixed(2)}
-              </div>
-              <div className="mt-1 text-xs capitalize text-white/50">
-                {data?.satellite.status || "--"} -- Trend: {data?.satellite.trend || "--"}
-              </div>
-              {data?.ndviTrajectory?.trajectory && (
-                <div className="mt-1.5 text-[10px] text-white/40">
-                  Trajectory: <span className={`font-semibold ${data.ndviTrajectory.trajectory === "improving" ? "text-healthy" : data.ndviTrajectory.trajectory === "declining" ? "text-stressed" : "text-white/60"}`}>{data.ndviTrajectory.trajectory}</span>
-                  {data.ndviTrajectory.benchmark_comparison && <span className="ml-1">({data.ndviTrajectory.benchmark_comparison})</span>}
+              {(callState === "processing" || callState === "connecting") && (
+                <div className="flex justify-start">
+                  <div className="bg-white border border-gray-200 rounded-lg px-4 py-2 shadow-sm">
+                    <div className="flex gap-1.5">
+                      <span className="h-2 w-2 rounded-full bg-[#138808] animate-bounce" />
+                      <span className="h-2 w-2 rounded-full bg-[#FF9933] animate-bounce [animation-delay:150ms]" />
+                      <span className="h-2 w-2 rounded-full bg-[#1a365d] animate-bounce [animation-delay:300ms]" />
+                    </div>
+                  </div>
                 </div>
               )}
-              {data?.growthStage?.stage && (
-                <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-healthy/10 border border-healthy/20 px-2.5 py-1">
-                  <Leaf size={10} className="text-healthy" />
-                  <span className="text-[10px] font-semibold text-healthy">{data.growthStage.stage}</span>
-                  {data.growthStage.days_since_sowing != null && (
-                    <span className="text-[10px] text-white/40">Day {data.growthStage.days_since_sowing}</span>
+              <div ref={chatEndRef} />
+            </div>
+
+            {/* Call controls */}
+            <div className="px-4 py-3 bg-white border-t border-gray-100 flex flex-col items-center gap-2">
+              {isInCall && (
+                <>
+                  <button onClick={endCall} className="flex items-center gap-2 px-5 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700">
+                    <PhoneOff size={16} /> End Call
+                  </button>
+                  {callState === "listening" && liveText && (
+                    <p className="text-xs text-[#1a365d] font-medium text-center max-w-[80%] truncate">{liveText}</p>
                   )}
-                  {data.growthStage.confidence && (
-                    <span className={`text-[9px] font-bold ml-0.5 ${data.growthStage.confidence === "HIGH" ? "text-healthy" : data.growthStage.confidence === "MEDIUM" ? "text-moderate" : "text-stressed"}`}>
-                      {data.growthStage.confidence}
-                    </span>
-                  )}
-                </div>
+                  {callState === "listening" && <p className="text-xs text-gray-400 flex items-center gap-1"><Mic size={10} className="text-[#138808]" /> Listening...</p>}
+                  {callState === "speaking" && <p className="text-xs text-gray-400 flex items-center gap-1"><Volume2 size={10} className="text-[#FF9933]" /> Speaking...</p>}
+                </>
               )}
-            </>
-          )}
-        </div>
-
-        <div className="glass-card glass-card-hover glow-blue p-5">
-          <div className="mb-3 flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky/10">
-              <CloudSun size={16} className="text-sky" />
             </div>
-            <span className="text-xs font-medium uppercase tracking-wider text-white/40">
-              Weather
-            </span>
-          </div>
-          {isLoading && !data ? (
-            <div className="h-9 w-20 rounded-lg shimmer" />
-          ) : (
-            <>
-              <div className="text-3xl font-bold tabular-nums text-sky">
-                {data?.weather.current.temp ?? "--"}°C
-              </div>
-              <div className="mt-1 text-xs text-white/50">
-                Humidity {data?.weather.current.humidity ?? "--"}% --{" "}
-                {data?.weather.current.condition || "--"}
-              </div>
-            </>
-          )}
-        </div>
 
-        <div className="glass-card glass-card-hover p-5" style={{ boxShadow: "0 0 20px rgba(234,179,8,0.1)" }}>
-          <div className="mb-3 flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-moderate/10">
-              <Store size={16} className="text-moderate" />
-            </div>
-            <span className="text-xs font-medium uppercase tracking-wider text-white/40">
-              Best Mandi
-            </span>
-          </div>
-          {isLoading && !data ? (
-            <div className="h-9 w-24 rounded-lg shimmer" />
-          ) : (
-            <>
-              <div className="text-3xl font-bold tabular-nums text-moderate">
-                {data?.mandi.bestPrice ? `₹${data.mandi.bestPrice.toLocaleString()}` : "--"}
-              </div>
-              <div className="mt-1 text-xs text-white/50">
-                {data?.mandi.bestMandi || "--"} -- per quintal
-              </div>
-              {data?.priceTrend?.direction && (
-                <div className={`mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold ${
-                  data.priceTrend.direction === "rising" ? "bg-healthy/10 border border-healthy/20 text-healthy" :
-                  data.priceTrend.direction === "falling" ? "bg-stressed/10 border border-stressed/20 text-stressed" :
-                  "bg-white/5 border border-white/10 text-white/50"
-                }`}>
-                  {data.priceTrend.direction === "rising" ? "↑" : data.priceTrend.direction === "falling" ? "↓" : "→"}
-                  {" "}{data.priceTrend.direction}
-                  {data.priceTrend.percentage != null && ` ${data.priceTrend.percentage.toFixed(1)}%`}
+            {/* Summary — after call ends */}
+            {callState === "ended" && advisoryMsgs.length > 0 && (
+              <div className="border-t-2 border-[#138808] p-4 bg-white">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="h-0.5 flex-1 bg-[#FF9933]" />
+                  <h3 className="text-xs font-bold text-[#1a365d] uppercase tracking-wider">Call Summary</h3>
+                  <div className="h-0.5 flex-1 bg-[#138808]" />
                 </div>
-              )}
-              {data?.spoilage?.is_perishable && (
-                <div className="mt-1.5 text-[10px] text-amber-400/70">
-                  {data.spoilage.spoilage_loss_per_quintal != null && <>Spoilage: ₹{data.spoilage.spoilage_loss_per_quintal}/qtl</>}
-                  {data.spoilage.transit_hours != null && <> -- Transit: {data.spoilage.transit_hours}h</>}
+                {farmerMsgs.length > 0 && (
+                  <p className="text-xs text-gray-500 mb-2"><strong>You:</strong> {farmerMsgs.map(m => m.text).join(" | ")}</p>
+                )}
+                <div className="text-sm text-gray-800 leading-relaxed mb-3">
+                  {advisoryMsgs[advisoryMsgs.length - 1].text}
                 </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Voice Input */}
-      <div className="mb-8">
-        <VoiceInput onSubmit={fetchAdvisory} isLoading={isLoading} />
-      </div>
-
-      {/* Combined Advisory */}
-      <div className="mb-8 glass-card p-5 sm:p-6 border border-healthy/10">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <h2 className="text-lg font-bold text-white/90">
-              🌾 AI Advisory Summary
-            </h2>
-            {data?.confidence && (
-              <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
-                data.confidence === "HIGH" ? "bg-healthy/15 border border-healthy/25 text-healthy" :
-                data.confidence === "MEDIUM" ? "bg-moderate/15 border border-moderate/25 text-moderate" :
-                "bg-stressed/15 border border-stressed/25 text-stressed"
-              }`}>
-                <ShieldCheck size={10} />
-                {data.confidence} Confidence
-              </span>
+                <p className="text-[10px] text-gray-400 text-center">KisanMind · {new Date().toLocaleDateString()} · KVK Helpline: 1800-180-1551</p>
+                <div className="text-center mt-4">
+                  <button onClick={() => { setCallState("pre-call"); setMessages([]); }}
+                    className="inline-flex items-center gap-2 px-6 py-2 rounded-lg bg-[#138808] text-white text-sm font-medium hover:bg-[#0f6d06]">
+                    <Phone size={16} /> New Call
+                  </button>
+                </div>
+              </div>
             )}
           </div>
-          <button
-            onClick={() => setShowEnglish(!showEnglish)}
-            className="rounded-lg bg-white/5 px-3 py-1.5 text-xs font-medium text-white/50 transition-colors hover:bg-white/10 hover:text-white/70"
-          >
-            {showEnglish ? "हिंदी" : "English"}
-          </button>
-        </div>
-        {isLoading && !data ? (
-          <div className="space-y-2">
-            <div className="h-4 w-full rounded shimmer" />
-            <div className="h-4 w-3/4 rounded shimmer" />
-          </div>
-        ) : (
-          <p className="text-sm leading-relaxed text-white/70">
-            {data?.combinedAdvisory || "Click Analyze to get advisory."}
-          </p>
         )}
-        {isLoading && <div className="mt-3 h-1 w-full shimmer rounded-full" />}
-      </div>
+      </main>
 
-      {/* Cross-Validation Alerts */}
-      {data?.crossValidation && data.crossValidation.length > 0 && (
-        <div className="mb-8 space-y-2">
-          {data.crossValidation.map((cv, i) => {
-            const colorMap: Record<string, string> = {
-              WARNING: "border-amber-500/30 bg-amber-500/10 text-amber-400",
-              CONFLICT: "border-stressed/30 bg-stressed/10 text-stressed",
-              AGREEMENT: "border-healthy/30 bg-healthy/10 text-healthy",
-              CAVEAT: "border-sky/30 bg-sky/10 text-sky",
-            };
-            const colors = colorMap[cv.type] || colorMap.CAVEAT;
-            return (
-              <div key={i} className={`flex items-start gap-3 rounded-xl border p-4 text-sm ${colors}`}>
-                <Info size={16} className="mt-0.5 shrink-0" />
-                <div>
-                  <span className="font-bold text-[10px] uppercase tracking-wider mr-2">{cv.type}</span>
-                  {cv.message}
-                  {cv.source && <span className="ml-1 text-[10px] opacity-60">({cv.source})</span>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {/* Footer */}
+      <footer className="text-center py-4 text-xs text-gray-400 border-t border-gray-100 mt-8">
+        <p>KisanMind · AI Krishi Salahkaar Seva · ET GenAI Hackathon 2026</p>
+        <p className="mt-1 text-[10px]">Data: ESA Sentinel-2, Sentinel-1, NASA SMAP, MODIS, AgMarkNet, Open-Meteo</p>
+      </footer>
 
-      {/* Nearest KVK Info Card */}
-      {data?.nearestKvk?.name && (
-        <div className="mb-8 glass-card p-5 border border-sky/10">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky/10">
-              <Phone size={16} className="text-sky" />
-            </div>
-            <h3 className="text-sm font-bold text-white/80">Nearest KVK (Krishi Vigyan Kendra)</h3>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-            <div>
-              <div className="font-semibold text-white/90">{data.nearestKvk.name}</div>
-              {data.nearestKvk.district && <div className="text-xs text-white/40">{data.nearestKvk.district}</div>}
-              {data.nearestKvk.distance_km != null && (
-                <div className="text-xs text-white/40 mt-0.5">{data.nearestKvk.distance_km.toFixed(1)} km away</div>
-              )}
-            </div>
-            <div className="space-y-1">
-              {data.nearestKvk.phone && (
-                <div className="text-xs text-white/60">
-                  KVK: <a href={`tel:${data.nearestKvk.phone}`} className="text-sky underline">{data.nearestKvk.phone}</a>
-                </div>
-              )}
-              <div className="text-xs text-white/60">
-                Kisan Helpline: <a href="tel:18001801551" className="text-sky underline">1800-180-1551</a> (Toll Free)
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Charts Grid */}
-      <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <NDVIChart />
-        <MandiComparison data={data?.mandiChartData} />
-      </div>
-
-      {/* Weather Timeline */}
-      <div className="mb-8">
-        <h2 className="mb-4 text-lg font-bold text-white/90">
-          5-Day Weather Forecast
-        </h2>
-        {isLoading && !data ? (
-          <div className="flex gap-3">
-            {[...Array(5)].map((_, i) => (
-              <div key={i} className="min-w-[150px] h-48 rounded-xl shimmer" />
-            ))}
-          </div>
-        ) : (
-          <WeatherTimeline forecast={data?.forecastDays} />
-        )}
-      </div>
-
-      {/* Advisory Cards */}
-      <div className="mb-8">
-        <h2 className="mb-4 text-lg font-bold text-white/90">
-          Action Items
-        </h2>
-        {isLoading && !data ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {[...Array(4)].map((_, i) => (
-              <div key={i} className="h-24 rounded-xl shimmer" />
-            ))}
-          </div>
-        ) : data?.advisories && data.advisories.length > 0 ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {data.advisories.map((adv, i) => (
-              <AdvisoryCard key={i} {...adv} />
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-white/40">No action items yet. Click Analyze to get advice.</p>
-        )}
-      </div>
+      <div className="flex h-1.5"><div className="flex-1 bg-[#FF9933]" /><div className="flex-1 bg-white" /><div className="flex-1 bg-[#138808]" /></div>
     </div>
   );
 }

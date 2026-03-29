@@ -5,14 +5,6 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  async redirects() {
-    return [
-      { source: "/", destination: "/talk", permanent: true },
-      { source: "/demo", destination: "/talk", permanent: true },
-      { source: "/mandi", destination: "/talk", permanent: true },
-      { source: "/weather", destination: "/talk", permanent: true },
-    ];
-  },
   async rewrites() {
     return [
       {

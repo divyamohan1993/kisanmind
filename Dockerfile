@@ -29,12 +29,10 @@ COPY cloud_functions/ ./cloud_functions/
 COPY data/ ./data/
 COPY scripts/ ./scripts/
 
-# Copy compiled frontend (standalone + static assets)
-COPY --from=frontend-builder /app/frontend/.next ./frontend/.next
+# Copy compiled frontend (standalone server + static assets + public)
+COPY --from=frontend-builder /app/frontend/.next/standalone ./frontend
+COPY --from=frontend-builder /app/frontend/.next/static ./frontend/.next/static
 COPY --from=frontend-builder /app/frontend/public ./frontend/public
-COPY --from=frontend-builder /app/frontend/package*.json ./frontend/
-COPY --from=frontend-builder /app/frontend/next.config.ts ./frontend/
-COPY --from=frontend-builder /app/frontend/node_modules ./frontend/node_modules
 
 # Copy entrypoint
 COPY infrastructure/entrypoint.sh ./entrypoint.sh
@@ -45,6 +43,7 @@ COPY .env* ./
 
 # Environment
 ENV PORT=8080
+ENV HOSTNAME=0.0.0.0
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 

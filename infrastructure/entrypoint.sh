@@ -22,7 +22,7 @@ done
 
 # Start the Next.js frontend on port 8080 (Cloud Run's exposed port)
 cd /app/frontend
-PORT=8080 npx next start -p 8080 &
+PORT=8080 node server.js &
 FRONTEND_PID=$!
 
 echo "Frontend running on :8080 (PID: $FRONTEND_PID) — Cloud Run exposed"
