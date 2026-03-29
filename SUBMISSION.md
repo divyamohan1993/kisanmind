@@ -35,7 +35,6 @@
 |------|--------|
 | Divya Mohan | [@divyamohan1993](https://github.com/divyamohan1993) |
 | Kumkum Thakur | [@kumkum-thakur](https://github.com/kumkum-thakur) |
-| Anshul Garg | [@Explotorium](https://github.com/Explotorium) |
 
 ---
 
