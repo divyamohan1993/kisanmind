@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Phone, PhoneOff, Leaf, Volume2 } from "lucide-react";
+import { Mic, Phone, PhoneOff, Leaf, Volume2 } from "lucide-react";
 import Link from "next/link";
 import useGeolocation from "../hooks/useGeolocation";
 
@@ -19,7 +19,7 @@ const LANGUAGES = [
   { code: "ne", label: "नेपाली" }, { code: "sd", label: "سنڌي" },
   { code: "doi", label: "डोगरी" }, { code: "ks", label: "كٲشُر" },
   { code: "kok", label: "कोंकणी" }, { code: "sat", label: "ᱥᱟᱱᱛᱟᱲᱤ" },
-  { code: "brx", label: "বোড়ো" }, { code: "mni", label: "मणिपुरी" },
+  { code: "brx", label: "বোড়ো" }, { code: "mni", label: "मणিपुरी" },
 ];
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
@@ -30,46 +30,46 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 interface ChatMessage {
   type: "farmer" | "kisanmind";
   text: string;
-  text_en: string;  // English source — used for re-translation on language switch
+  text_en: string;
   timestamp: Date;
   kind?: "conversation" | "advisory" | "status";
 }
 
-type CallState = "pre-call" | "connecting" | "in-call" | "ended";
+type CallState = "pre-call" | "connecting" | "listening" | "processing" | "speaking" | "ended";
 
 /* ------------------------------------------------------------------ */
-/*  PCM Audio Helpers                                                  */
+/*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
-
-/** Convert Float32Array (Web Audio API) to Int16 PCM bytes */
-function float32ToInt16(float32: Float32Array): ArrayBuffer {
-  const int16 = new Int16Array(float32.length);
-  for (let i = 0; i < float32.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]));
-    int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+async function playTTS(text: string, language: string): Promise<HTMLAudioElement | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, language }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.audio_base64) return null;
+    const audio = new Audio(`data:audio/mp3;base64,${data.audio_base64}`);
+    audio.play();
+    return audio;
+  } catch {
+    return null;
   }
-  return int16.buffer;
 }
 
-/** Downsample from source sample rate to 16kHz */
-function downsample(buffer: Float32Array, fromRate: number, toRate: number): Float32Array {
-  if (fromRate === toRate) return buffer;
-  const ratio = fromRate / toRate;
-  const newLength = Math.round(buffer.length / ratio);
-  const result = new Float32Array(newLength);
-  for (let i = 0; i < newLength; i++) {
-    const idx = Math.round(i * ratio);
-    result[i] = buffer[Math.min(idx, buffer.length - 1)];
-  }
-  return result;
+function waitForAudioEnd(audio: HTMLAudioElement | null): Promise<void> {
+  if (!audio) return Promise.resolve();
+  return new Promise((resolve) => {
+    audio.onended = () => resolve();
+    audio.onerror = () => resolve();
+  });
 }
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 export default function TalkPage() {
-  // Always init with "hi" on server AND client to avoid hydration mismatch (#418).
-  // Then sync from localStorage in useEffect after mount.
   const [language, setLanguageRaw] = useState("hi");
   useEffect(() => {
     const saved = localStorage.getItem("kisanmind_lang");
@@ -85,11 +85,13 @@ export default function TalkPage() {
   const [showLangPicker, setShowLangPicker] = useState(false);
   const [statusText, setStatusText] = useState("");
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
-  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const callActiveRef = useRef(false);
+  const sessionIdRef = useRef("");
+  const silenceCountRef = useRef(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const geo = useGeolocation();
@@ -103,11 +105,9 @@ export default function TalkPage() {
   useEffect(() => {
     if (messages.length === 0) return;
     if (language === "en") {
-      // English — just use text_en directly
       setMessages((prev) => prev.map((m) => ({ ...m, text: m.text_en })));
       return;
     }
-    // Batch translate all English source texts to new language
     const texts = messages.map((m) => m.text_en);
     fetch(`${API_BASE}/api/translate`, {
       method: "POST",
@@ -122,7 +122,7 @@ export default function TalkPage() {
           );
         }
       })
-      .catch(() => {}); // keep existing text on failure
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [language]);
 
@@ -130,176 +130,276 @@ export default function TalkPage() {
     setMessages((prev) => [...prev, { type, text, text_en: textEn || text, timestamp: new Date(), kind }]);
   }, []);
 
-  /* ---- PCM playback: play Gemini's audio chunks ---- */
-  const playPcmChunk = useCallback((base64Pcm: string) => {
-    const ctx = audioContextRef.current;
-    if (!ctx) return;
-
-    // Decode base64 to Int16 PCM (24kHz from Gemini)
-    const raw = atob(base64Pcm);
-    const bytes = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-    const int16 = new Int16Array(bytes.buffer);
-
-    // Convert Int16 to Float32 for Web Audio API
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 0x7fff;
-
-    // Create AudioBuffer at 24kHz (Gemini output rate)
-    const audioBuffer = ctx.createBuffer(1, float32.length, 24000);
-    audioBuffer.getChannelData(0).set(float32);
-
-    // Queue and play
-    const source = ctx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(ctx.destination);
-    source.start();
+  /* ---- Mic helpers ---- */
+  const startMic = useCallback(async (): Promise<void> => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    streamRef.current = stream;
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
+    const recorder = new MediaRecorder(stream, { mimeType });
+    chunksRef.current = [];
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+    mediaRecorderRef.current = recorder;
+    recorder.start(250);
   }, []);
 
-  /* ---- Start call: open WebSocket, start mic streaming ---- */
+  const stopMic = useCallback((): Promise<Blob> => {
+    return new Promise((resolve) => {
+      const recorder = mediaRecorderRef.current;
+      if (!recorder || recorder.state === "inactive") { resolve(new Blob()); return; }
+      recorder.onstop = () => resolve(new Blob(chunksRef.current, { type: recorder.mimeType }));
+      recorder.stop();
+    });
+  }, []);
+
+  const releaseMic = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  }, []);
+
+  /* ---- Voice activity detection + recording ---- */
+  const SILENCE_TIMEOUT = 4;
+  const MAX_RECORDING = 30;
+
+  const listenOnce = useCallback(async (): Promise<string> => {
+    if (!callActiveRef.current) return "";
+    setCallState("listening");
+    setStatusText("");
+
+    await startMic();
+
+    const stream = streamRef.current;
+    let isSpeaking = false;
+    let silenceStart = 0;
+    let hasSpokeAtAll = false;
+    let analyser: AnalyserNode | null = null;
+
+    if (stream) {
+      try {
+        const audioCtx = new AudioContext();
+        const source = audioCtx.createMediaStreamSource(stream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.4;
+        source.connect(analyser);
+      } catch { /* fallback to fixed timer */ }
+    }
+
+    const getAudioLevel = (): number => {
+      if (!analyser) return 0;
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += data[i];
+      return sum / data.length;
+    };
+
+    const result = await new Promise<"timeout" | "silence" | "cancelled">((resolve) => {
+      const startTime = Date.now();
+      const interval = setInterval(() => {
+        if (!callActiveRef.current) { clearInterval(interval); resolve("cancelled"); return; }
+        const elapsed = (Date.now() - startTime) / 1000;
+        if (elapsed >= MAX_RECORDING) { clearInterval(interval); resolve("timeout"); return; }
+
+        const level = getAudioLevel();
+        const speaking = level > 30;
+
+        if (speaking) {
+          isSpeaking = true;
+          hasSpokeAtAll = true;
+          silenceStart = 0;
+        } else if (isSpeaking && !speaking) {
+          isSpeaking = false;
+          silenceStart = Date.now();
+        }
+
+        if (hasSpokeAtAll && !isSpeaking && silenceStart > 0) {
+          const silenceSec = (Date.now() - silenceStart) / 1000;
+          if (silenceSec >= SILENCE_TIMEOUT) {
+            clearInterval(interval);
+            resolve("silence");
+          }
+        }
+
+        if (!hasSpokeAtAll && elapsed > 8) {
+          clearInterval(interval);
+          resolve("timeout");
+        }
+      }, 200);
+    });
+
+    if (result === "cancelled") { releaseMic(); return ""; }
+
+    const blob = await stopMic();
+    releaseMic();
+    if (blob.size === 0 || !hasSpokeAtAll) return "";
+
+    // STT
+    setCallState("processing");
+    setStatusText("");
+    try {
+      const fd = new FormData();
+      fd.append("audio", blob, "recording.webm");
+      fd.append("language", language);
+      const res = await fetch(`${API_BASE}/api/stt`, { method: "POST", body: fd });
+      const d = await res.json();
+      return d.transcript || "";
+    } catch { return ""; }
+  }, [language, startMic, stopMic, releaseMic]);
+
+  /* ---- Multi-turn conversation loop ---- */
+  const conversationLoop = useCallback(async (): Promise<void> => {
+    // First turn: send a greeting trigger to Gemini
+    setCallState("processing");
+    try {
+      const greetResp = await fetch(`${API_BASE}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          message: "Hello, I need farming advice.",
+          language,
+          latitude: geo.latitude || 0,
+          longitude: geo.longitude || 0,
+        }),
+      });
+      const greetData = await greetResp.json();
+      sessionIdRef.current = greetData.session_id || sessionIdRef.current;
+
+      // Speak greeting
+      setCallState("speaking");
+      addMessage("kisanmind", greetData.response, "conversation", greetData.response_en || greetData.response);
+      const greetAudio = await playTTS(greetData.response, language);
+      await waitForAudioEnd(greetAudio);
+    } catch {
+      addMessage("kisanmind", "Connection issue. Please try again.", "status", "Connection issue. Please try again.");
+      callActiveRef.current = false;
+      setCallState("ended");
+      return;
+    }
+
+    // Conversation turns
+    while (callActiveRef.current) {
+      const transcript = await listenOnce();
+
+      if (!transcript.trim()) {
+        silenceCountRef.current++;
+        if (silenceCountRef.current >= 2) {
+          callActiveRef.current = false;
+          setCallState("ended");
+          return;
+        }
+        // Ask Gemini what to say when farmer is silent
+        try {
+          const silenceResp = await fetch(`${API_BASE}/api/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_id: sessionIdRef.current,
+              message: "(farmer was silent, could not hear anything)",
+              language,
+              latitude: geo.latitude || 0,
+              longitude: geo.longitude || 0,
+            }),
+          });
+          const silenceData = await silenceResp.json();
+          setCallState("speaking");
+          addMessage("kisanmind", silenceData.response, "conversation", silenceData.response_en || silenceData.response);
+          const retryAudio = await playTTS(silenceData.response, language);
+          await waitForAudioEnd(retryAudio);
+        } catch {}
+        continue;
+      }
+
+      silenceCountRef.current = 0;
+      addMessage("farmer", transcript, "conversation", transcript);
+
+      // Send to Gemini conversation
+      setCallState("processing");
+      setStatusText("");
+      try {
+        const chatResp = await fetch(`${API_BASE}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sessionIdRef.current,
+            message: transcript,
+            language,
+            latitude: geo.latitude || 0,
+            longitude: geo.longitude || 0,
+          }),
+        });
+        const chatData = await chatResp.json();
+
+        // Speak Gemini's response
+        setCallState("speaking");
+        const kind = chatData.has_advisory ? "advisory" : "conversation";
+        addMessage("kisanmind", chatData.response, kind, chatData.response_en || chatData.response);
+        const respAudio = await playTTS(chatData.response, language);
+        currentAudioRef.current = respAudio;
+        await waitForAudioEnd(respAudio);
+
+        // If advisory was delivered, ask for follow-up then end
+        if (chatData.has_advisory) {
+          // One more listen for follow-up questions
+          if (!callActiveRef.current) break;
+          const followUp = await listenOnce();
+          if (followUp.trim()) {
+            addMessage("farmer", followUp, "conversation", followUp);
+            setCallState("processing");
+            const followResp = await fetch(`${API_BASE}/api/chat`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                session_id: sessionIdRef.current,
+                message: followUp,
+                language,
+                latitude: geo.latitude || 0,
+                longitude: geo.longitude || 0,
+              }),
+            });
+            const followData = await followResp.json();
+            setCallState("speaking");
+            addMessage("kisanmind", followData.response, followData.has_advisory ? "advisory" : "conversation", followData.response_en || followData.response);
+            const followAudio = await playTTS(followData.response, language);
+            await waitForAudioEnd(followAudio);
+          }
+          callActiveRef.current = false;
+          setCallState("ended");
+          return;
+        }
+      } catch {
+        addMessage("kisanmind", "Technical issue. Please try again.", "status", "Technical issue. Please try again.");
+      }
+    }
+  }, [language, geo.latitude, geo.longitude, listenOnce, addMessage]);
+
+  /* ---- Start the call ---- */
   const startCall = useCallback(async () => {
     callActiveRef.current = true;
+    silenceCountRef.current = 0;
+    sessionIdRef.current = "";
     setMessages([]);
     setCallState("connecting");
     setStatusText("");
 
-    try {
-      // Set up AudioContext
-      const ctx = new AudioContext({ sampleRate: 16000 });
-      audioContextRef.current = ctx;
+    await conversationLoop();
+  }, [conversationLoop]);
 
-      // Open WebSocket
-      const wsUrl = API_BASE.replace(/^http/, "ws") + "/ws/chat";
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        // Send config
-        ws.send(JSON.stringify({
-          type: "config",
-          language,
-          latitude: geo.latitude || 0,
-          longitude: geo.longitude || 0,
-        }));
-      };
-
-      ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-
-        switch (msg.type) {
-          case "session_started":
-            setCallState("in-call");
-            setStatusText("");
-            break;
-
-          case "audio":
-            playPcmChunk(msg.data);
-            break;
-
-          case "transcript":
-            addMessage(
-              msg.speaker === "farmer" ? "farmer" : "kisanmind",
-              msg.text,
-              "conversation",
-              msg.text_en || msg.text
-            );
-            break;
-
-          case "status":
-            if (msg.status === "fetching_data") {
-              setStatusText("\uD83D\uDD0D");
-            } else {
-              setStatusText("");
-            }
-            break;
-
-          case "turn_complete":
-            break;
-        }
-      };
-
-      ws.onerror = () => {
-        setCallState("ended");
-        setStatusText("");
-      };
-
-      ws.onclose = () => {
-        if (callActiveRef.current) {
-          callActiveRef.current = false;
-          setCallState("ended");
-        }
-      };
-
-      // Start mic and stream PCM
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
-      });
-      streamRef.current = stream;
-
-      const source = ctx.createMediaStreamSource(stream);
-
-      // Use AudioWorklet for mic capture (no deprecation warning)
-      const workletCode = `
-        class PcmProcessor extends AudioWorkletProcessor {
-          process(inputs) {
-            const input = inputs[0];
-            if (input && input[0] && input[0].length > 0) {
-              this.port.postMessage(input[0]);
-            }
-            return true;
-          }
-        }
-        registerProcessor("pcm-processor", PcmProcessor);
-      `;
-      const blob = new Blob([workletCode], { type: "application/javascript" });
-      const workletUrl = URL.createObjectURL(blob);
-      await ctx.audioWorklet.addModule(workletUrl);
-      URL.revokeObjectURL(workletUrl);
-
-      const workletNode = new AudioWorkletNode(ctx, "pcm-processor");
-      workletNodeRef.current = workletNode;
-
-      workletNode.port.onmessage = (e) => {
-        if (!callActiveRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        const float32: Float32Array = e.data;
-        const downsampled = downsample(float32, ctx.sampleRate, 16000);
-        const pcmBytes = float32ToInt16(downsampled);
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(pcmBytes)));
-        wsRef.current.send(JSON.stringify({ type: "audio", data: base64 }));
-      };
-
-      source.connect(workletNode);
-      workletNode.connect(ctx.destination);
-
-    } catch (err) {
-      console.error("Failed to start call:", err);
-      setCallState("ended");
-    }
-  }, [language, geo.latitude, geo.longitude, addMessage, playPcmChunk]);
-
-  /* ---- End call ---- */
+  /* ---- End the call ---- */
   const endCall = useCallback(() => {
     callActiveRef.current = false;
-
-    if (wsRef.current) {
-      try { wsRef.current.send(JSON.stringify({ type: "end" })); } catch {}
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    workletNodeRef.current?.disconnect();
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-
-    audioContextRef.current?.close();
-    audioContextRef.current = null;
-
+    currentAudioRef.current?.pause();
+    currentAudioRef.current = null;
+    mediaRecorderRef.current?.stop();
+    releaseMic();
     setCallState("ended");
     setStatusText("");
-  }, []);
+  }, [releaseMic]);
 
   /* ---- UI ---- */
-  const isInCall = callState === "in-call" || callState === "connecting";
+  const isInCall = !["pre-call", "ended"].includes(callState);
   const currentLang = LANGUAGES.find((l) => l.code === language) || LANGUAGES[0];
 
   return (
@@ -307,7 +407,7 @@ export default function TalkPage() {
       {/* Top bar */}
       <div className="flex items-center justify-between px-4 py-3 bg-[#0d1117]/90 border-b border-white/5">
         <Link href="/" className="flex items-center gap-2">
-          <span className="text-xl">{"\uD83C\uDF3E"}</span>
+          <span className="text-xl">🌾</span>
           <span className="text-base font-bold gradient-text">KisanMind</span>
         </Link>
 
@@ -325,7 +425,7 @@ export default function TalkPage() {
           <div className="flex items-center gap-2 text-sm">
             <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
             <span className="text-white/60">{currentLang.label}</span>
-            {statusText && <span className="text-white/40 text-xs">{statusText}</span>}
+            {callState === "listening" && <Mic size={14} className="text-emerald-400 animate-pulse" />}
           </div>
         )}
 
@@ -360,20 +460,8 @@ export default function TalkPage() {
         {callState === "pre-call" && (
           <div className="flex flex-col items-center justify-center h-full text-center opacity-50">
             <Leaf size={48} className="mb-4" />
-            <p className="text-lg">{"\uD83C\uDF3E"} KisanMind</p>
+            <p className="text-lg">🌾 KisanMind</p>
             <p className="text-sm mt-2 text-white/40">Tap the green button to start</p>
-          </div>
-        )}
-
-        {callState === "connecting" && (
-          <div className="flex justify-center mt-8">
-            <div className="bg-emerald-600/10 border border-emerald-500/20 rounded-2xl px-6 py-4">
-              <div className="flex gap-1.5 justify-center">
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" />
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:150ms]" />
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:300ms]" />
-              </div>
-            </div>
           </div>
         )}
 
@@ -383,6 +471,8 @@ export default function TalkPage() {
             <div className={`max-w-[85%] rounded-2xl px-4 py-3 leading-relaxed ${
               msg.type === "farmer"
                 ? "bg-blue-600/20 border border-blue-500/20 text-white/90 text-sm"
+                : msg.kind === "advisory"
+                ? "bg-emerald-600/15 border-l-4 border-emerald-400 text-white text-base font-medium"
                 : msg.kind === "status"
                 ? "bg-white/5 border border-white/10 text-white/60 text-xs italic"
                 : "bg-emerald-600/10 border border-emerald-500/20 text-white/90 text-sm"
@@ -390,10 +480,24 @@ export default function TalkPage() {
               <div className="text-[10px] text-white/30 mb-1">
                 {msg.type === "farmer" ? "You" : "KisanMind"} · {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </div>
+              {msg.kind === "advisory" && <span>🌾 </span>}
               {msg.text}
             </div>
           </div>
         ))}
+
+        {/* Processing indicator */}
+        {(callState === "processing" || callState === "connecting") && (
+          <div className="flex justify-start">
+            <div className="bg-emerald-600/10 border border-emerald-500/20 rounded-2xl px-4 py-3">
+              <div className="flex gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" />
+                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:150ms]" />
+                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:300ms]" />
+              </div>
+            </div>
+          </div>
+        )}
 
         <div ref={chatEndRef} />
       </div>
@@ -427,10 +531,17 @@ export default function TalkPage() {
           </button>
         )}
 
-        {isInCall && (
+        {callState === "listening" && (
           <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-xs text-white/40">Live</span>
+            <Mic size={16} className="text-emerald-400 animate-pulse" />
+            <span className="text-xs text-white/40">Listening...</span>
+          </div>
+        )}
+
+        {callState === "speaking" && (
+          <div className="flex items-center gap-2">
+            <Volume2 size={16} className="text-emerald-400 animate-pulse" />
+            <span className="text-xs text-white/40">Speaking...</span>
           </div>
         )}
       </div>
