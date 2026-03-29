@@ -4,16 +4,25 @@
   <img src="https://img.shields.io/badge/Phase_II-Submission-f59e0b?style=for-the-badge" alt="Phase II" />
 </p>
 
-<h1 align="center">KisanMind (किसानमाइंड)</h1>
+<h1 align="center">🌾 KisanMind (किसानमाइंड)</h1>
 <h3 align="center">Satellite-to-Voice Agricultural Intelligence for 150M Indian Farmers</h3>
 
 <p align="center">
-  <b>Real Sentinel-2 NDVI</b> · <b>Live Mandi Prices</b> · <b>5-Day Weather</b> · <b>Voice in 22 Languages</b> · <b>Twilio Phone Calls</b>
+  <b>4 Satellites (Sentinel-2, SAR, MODIS, SMAP)</b> · <b>112 Crop Prices</b> · <b>5-Day Weather</b> · <b>Voice in 22 Languages</b> · <b>Twilio Phone Calls</b>
 </p>
 
 <p align="center">
-  <a href="https://kisanmind.dmj.one"><img src="https://img.shields.io/badge/Live_App-kisanmind.dmj.one-22c55e?style=for-the-badge&logo=google-cloud&logoColor=white" alt="Live App" /></a>
+  <a href="https://kisanmind.dmj.one"><img src="https://img.shields.io/badge/Live_App-kisanmind.dmj.one-22c55e?style=for-the-badge&logo=phone&logoColor=white" alt="Live App" /></a>
   <a href="https://github.com/divyamohan1993/kisanmind"><img src="https://img.shields.io/badge/GitHub-Repository-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub" /></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white" />
+  <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat-square&logo=fastapi&logoColor=white" />
+  <img src="https://img.shields.io/badge/Gemini-3_Flash-4285F4?style=flat-square&logo=google&logoColor=white" />
+  <img src="https://img.shields.io/badge/Earth_Engine-4_Satellites-FF6F00?style=flat-square&logo=google-earth&logoColor=white" />
+  <img src="https://img.shields.io/badge/WCAG-2.2_AAA-138808?style=flat-square" />
 </p>
 
 ---
@@ -40,15 +49,29 @@
 
 ## Project Overview
 
-**KisanMind** is a multi-agent AI platform that delivers satellite crop health, real-time mandi prices, and hyperlocal weather advisories to Indian farmers — all via a single phone call in any of 22 scheduled Indian languages. It fuses Sentinel-2 imagery, AgMarkNet government prices, Open-Meteo forecasts, and Google Maps logistics through 5 orchestrated Gemini agents.
+**KisanMind** is an AI platform that delivers satellite crop health, real-time mandi prices, and hyperlocal weather advisories to Indian farmers — via a single phone call in any of 22 scheduled Indian languages.
 
-> **Deployment:** Live at [kisanmind.dmj.one](https://kisanmind.dmj.one) on Google Cloud Run (asia-south1). If the link is inaccessible, the spot VM backing the service may have been preempted.
+It fuses **9 real data sources** in real-time:
+
+| # | Source | What It Provides |
+|---|--------|-----------------|
+| 1 | **Sentinel-2** (10m) | Crop health — NDVI, EVI, NDWI indices |
+| 2 | **Sentinel-1 SAR** (10m) | Radar soil moisture — works through clouds |
+| 3 | **MODIS Terra** (1km) | Land surface temperature — heat stress detection |
+| 4 | **NASA SMAP L4** (9km) | Root-zone moisture — 0–100cm deep |
+| 5 | **AgMarkNet** | 112 commodity prices + 90-day history from data.gov.in |
+| 6 | **Google Maps** | Driving distances, transport cost, nearest KVK |
+| 7 | **Open-Meteo** | 5-day forecast + 90-day historical for GDD growth stage |
+| 8 | **GPS** | Browser geolocation or manual village name input |
+| 9 | **Gemini 3 Flash** | Advisory synthesis with 5-model fallback chain |
+
+> **Deployment:** Live at [kisanmind.dmj.one](https://kisanmind.dmj.one) on a VM with systemd auto-deploy via GitHub webhook.
 
 ---
 
 ## 3-Minute Pitch Video
 
-End-to-end walkthrough: a farmer calls in Hindi, the system detects intent, fetches live satellite NDVI, compares mandi prices with transport costs, generates weather-timed advice, and responds via voice — all in under 30 seconds.
+End-to-end walkthrough: a farmer calls in Hindi, the system detects intent, fetches live data from 4 satellites + mandi prices + weather, cross-validates sources, generates weather-timed advice with sell timing, and responds via voice — all in under 30 seconds.
 
 <!-- Replace VIDEO_ID with the actual YouTube video ID when available -->
 [![KisanMind Pitch Video](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=VIDEO_ID)
@@ -57,87 +80,162 @@ End-to-end walkthrough: a farmer calls in Hindi, the system detects intent, fetc
 
 ## Architecture Overview
 
-Five specialized agents orchestrated by a Brain module, each backed by real data APIs. No simulated data — every number comes from a verified source.
+### System Architecture
 
-### Data Flow
+```mermaid
+graph TB
+    subgraph "Farmer Interface"
+        A[Web Browser<br/>kisanmind.dmj.one] -->|Voice / Text| B[Next.js 16 Frontend<br/>WCAG 2.2 AAA]
+        T[Phone Call<br/>+1 260-254-7946] -->|Twilio Webhook| D
+    end
 
+    subgraph "Backend — FastAPI"
+        B -->|/api/*| D[FastAPI Backend<br/>Fully Async]
+        D --> E[Gemini 3 Flash<br/>5-Model Fallback Chain]
+        D --> WS[Gemini Live<br/>WebSocket Voice]
+        D --> XV[Cross-Validation<br/>Multi-Source Conflict Detection]
+    end
+
+    subgraph "4 Satellites via Earth Engine"
+        D -->|Sentinel-2| S2[NDVI / EVI / NDWI<br/>10m Crop Health]
+        D -->|Sentinel-1 SAR| S1[VV / VH Backscatter<br/>Soil Moisture Through Clouds]
+        D -->|MODIS Terra| MT[Day / Night LST<br/>1km Heat Stress]
+        D -->|NASA SMAP L4| SM[Surface + Root-Zone<br/>9km Deep Moisture]
+    end
+
+    subgraph "Market + Weather + Location"
+        D -->|data.gov.in| H[AgMarkNet<br/>112 Crops · 90-Day History]
+        D -->|Open-Meteo| I[5-Day Forecast<br/>90-Day Historical · GDD]
+        D -->|Maps Platform| J[Distance Matrix<br/>Geocoding · KVK Search]
+    end
+
+    subgraph "Voice Pipeline"
+        D -->|STT V2| L[Cloud Speech-to-Text<br/>22 Languages]
+        D -->|TTS| M[Cloud TTS Wavenet<br/>10 Indian Voices]
+        D -->|Translation v3| N[Cloud Translation<br/>22 Languages]
+    end
+
+    subgraph "3-Tier Cache"
+        D --> O[L0: Satellite Grid<br/>3,788 Points · O-1 Lookup]
+        D --> P[L1: In-Memory · 0.13s]
+        D --> Q[L2: Cloud Storage · ~200ms]
+    end
+
+    style A fill:#138808,color:#fff
+    style T fill:#f43f5e,color:#fff
+    style D fill:#1a365d,color:#fff
+    style E fill:#6366f1,color:#fff
+    style S2 fill:#22c55e,color:#fff
+    style S1 fill:#FF9933,color:#fff
+    style MT fill:#ef4444,color:#fff
+    style SM fill:#38bdf8,color:#fff
 ```
-┌──────────────────┐     ┌─────────────────────────┐     ┌────────────────┐
-│  Farmer          │     │  VaaniSetu              │     │  Brain         │
-│  Voice / Text    │────▶│  STT + Intent Extraction│────▶│  (Router)      │
-└──────────────────┘     └─────────────────────────┘     └───────┬────────┘
-                                                                 │
-                                          ┌──────────────────────┼──────────────────────┐
-                                          │                      │                      │
-                                          ▼                      ▼                      ▼
-                                   ┌─────────────┐      ┌──────────────┐      ┌──────────────┐
-                                   │ SatDrishti   │      │ MandiMitra   │      │ MausamGuru   │
-                                   │ (Satellite)  │      │ (Market)     │      │ (Weather)    │
-                                   │ Earth Engine │      │ AgMarkNet    │      │ Open-Meteo   │
-                                   └──────┬──────┘      └──────┬───────┘      └──────┬───────┘
-                                          │                      │                      │
-                                          └──────────────────────┼──────────────────────┘
-                                                                 │
-                                                                 ▼
-                                                    ┌────────────────────────┐
-                                                    │  Brain                 │
-                                                    │  Merge + Guardrails    │
-                                                    │  + Fact-Check          │
-                                                    └───────────┬────────────┘
-                                                                │
-                                                                ▼
-                                                    ┌─────────────────────────┐     ┌──────────────────┐
-                                                    │  VaaniSetu              │────▶│  Farmer          │
-                                                    │  TTS + Translation      │     │  Voice / Text    │
-                                                    └─────────────────────────┘     └──────────────────┘
+
+### Voice Call Flow
+
+```mermaid
+sequenceDiagram
+    participant F as Farmer
+    participant FE as Browser / Twilio
+    participant BE as FastAPI
+    participant G as Gemini 3 Flash
+    participant EE as Earth Engine (4 Satellites)
+    participant AM as AgMarkNet
+    participant WX as Open-Meteo
+    participant GM as Google Maps
+
+    F->>FE: Speaks in native language
+    FE->>BE: /api/chat or /ws/chat
+    BE->>G: Multi-turn conversation
+    G-->>BE: Extracts crop, problems, sowing date
+    Note over BE: Turn 2-3: Gemini calls fetch_farm_data
+
+    par Parallel Data Fetch (all at once)
+        BE->>EE: Sentinel-2 (NDVI/EVI/NDWI)
+        BE->>EE: Sentinel-1 SAR (soil moisture)
+        BE->>EE: MODIS Terra (surface temp)
+        BE->>EE: NASA SMAP (root-zone moisture)
+        BE->>AM: Mandi prices + 90-day history
+        BE->>WX: 5-day forecast + 90-day historical
+        BE->>GM: Distances + KVK search
+    end
+
+    EE-->>BE: NDVI 0.54, SAR moist, LST 31°C, SMAP adequate
+    AM-->>BE: 15 mandis with prices
+    WX-->>BE: Rain Mar 30, 32°C max
+    GM-->>BE: Distances + nearest KVK
+
+    BE->>BE: Cross-validate all sources
+    BE->>BE: Net profit (price − transport − commission − spoilage)
+    BE->>BE: Growth stage via GDD
+    BE->>BE: Confidence score per source
+
+    BE->>G: All data + cross-validation → synthesize advisory
+    G-->>BE: Personalized advice in farmer's language
+    BE->>BE: Fact-check against source data
+
+    BE->>FE: TTS audio + text response
+    FE->>F: Speaks advisory aloud
+
+    Note over F,FE: Multi-turn follow-ups · Call summary on end
 ```
 
-### Agent Roles
+### How Each Data Source Is Used
 
-#### 🧠 Brain (Orchestrator) — `Gemini 3.1 Pro`
+| Source | Raw Data | Processing | What Farmer Hears |
+|--------|----------|-----------|-------------------|
+| **Sentinel-2** | B2/B3/B4/B8 bands → NDVI/EVI/NDWI | Health classification, 30-day trend, district benchmark | "Aapki fasal ki sehat madhyam hai" |
+| **Sentinel-1 SAR** | VV/VH backscatter (dB) | Moisture: wet/moist/dry/very_dry via C-band thresholds | "Mitti mein paani theek hai" |
+| **MODIS Terra** | LST_Day/Night (scale × 0.02 − 273.15) | Heat stress: none/moderate/high/extreme | "Dhoop zyada hai, subah paani dein" |
+| **NASA SMAP** | sm_surface + sm_rootzone (m³/m³) | Root-zone class + surface vs deep comparison | "Jad mein paani kam hai, gehra paani dein" |
+| **AgMarkNet** | Modal/min/max prices per mandi per day | Net profit after transport + commission + spoilage | "Bhuntar mandi mein 7500 Rs/quintal" |
+| **Open-Meteo** | Hourly temp, humidity, precip, wind | Daily aggregates + GDD accumulation | "Kal baarish hogi, chhidkaav mat karein" |
+| **Google Maps** | Distance matrix (driving km + duration) | Transport cost at ₹3.5/km/quintal | "251 km door, 6 ghante ka safar" |
 
-Routes farmer intent to specialist agents, executes them in parallel via `asyncio.gather()`, merges outputs, enforces guardrails (no pesticide brands, no yield guarantees), and runs a Gemini Flash Lite fact-checker before delivery.
+### Cross-Validation Engine
 
-#### 🎙️ VaaniSetu (Voice Bridge) — `Gemini 2.5 Flash`
+The system doesn't just relay data — it cross-validates across sources to catch contradictions:
 
-STT in 22 languages via Cloud Speech V2. Extracts intent & entities (crop, location). TTS via Wavenet/Neural2 voices. Translates advisory into farmer's language.
-
-#### 🛰️ SatDrishti (Satellite Eye) — `Gemini 2.0 Flash`
-
-Computes NDVI/EVI/NDWI from Sentinel-2 (10m resolution) via Earth Engine. Classifies crop health with 30-day trends. Falls back to pre-computed cache when clouds block imagery.
-
-#### 🏪 MandiMitra (Market Friend) — `Gemini 2.0 Flash`
-
-Fetches live prices from 7,000+ mandis via AgMarkNet. Calculates net profit per quintal (price − transport − commission − spoilage) using Google Maps real distances.
-
-#### 🌦️ MausamGuru (Weather Guru) — `Gemini 2.5 Flash`
-
-5-day hyperlocal forecast from Open-Meteo. Computes Growing Degree Days to estimate crop growth stage. Generates DO/DON'T/WARNING actions tailored to crop and weather.
+| Conflict | Sources Compared | Action |
+|----------|-----------------|--------|
+| NDVI declining + adequate rain | Sentinel-2 vs Open-Meteo | Flag pest/disease → refer KVK (NOT irrigation) |
+| NDVI declining + SAR confirms dry | Sentinel-2 vs Sentinel-1 | High-confidence irrigation recommendation |
+| MODIS heat stress + flowering stage | MODIS vs GDD model | Crop protection alert with shade/irrigation advice |
+| Rain forecast + harvest-ready stage | Open-Meteo vs GDD model | Urgent harvest-before-rain warning |
+| Price rising + high market activity | AgMarkNet trend analysis | Hedge advice — sell partial, hold rest |
+| Surface wet but root-zone dry | SMAP surface vs root-zone | Deep irrigation needed — surface rain didn't reach roots |
 
 ### Error Handling & Resilience
 
 | Mechanism | Details |
 |-----------|---------|
-| **2-tier cache** | L1 in-memory (0.13s) + L2 Cloud Storage (200ms); stale data served if both APIs fail |
-| **Model fallback** | Gemini 3.1 Flash → 2.5 Flash automatic failover |
-| **Agent isolation** | If one agent errors, others still return; Brain synthesizes partial advisory |
-| **5-tier connectivity** | Smartphone → 2G voice call → SMS → missed-call callback → proactive push |
-| **Guardrail enforcement** | Fact-checked via Gemini Flash Lite before delivery; KVK referral for pest/disease specifics |
+| **5-model fallback** | Gemini 3 Flash → 2.5 Flash → 2.0 Flash → 2.0 Flash Lite → 1.5 Flash |
+| **Retry on 429** | Extracts API retry delay, waits (capped 15s), retries once per model |
+| **Vertex AI fallback** | If all API key models exhausted, falls back to Vertex AI (billing-backed) |
+| **3-tier cache** | L0 satellite grid (O(1)) + L1 memory (0.13s) + L2 GCS (~200ms) |
+| **Stale-while-revalidate** | Serves cached data if all APIs fail; background refresh when possible |
+| **Session cleanup** | Auto-evicts stale sessions (>1hr text, >7d call) to prevent memory leaks |
+| **Graceful degradation** | If one satellite fails, others still return; advisory adapts to available data |
+| **Confidence gating** | LOW confidence data is omitted; MEDIUM is hedged; only HIGH stated as advice |
 
 ### Tech Stack
 
 | Layer | Technologies |
 |-------|-------------|
-| **AI/LLM** | Gemini 3.1 Pro, Gemini Flash, Google ADK |
-| **Backend** | FastAPI (Python 3.12), Uvicorn, httpx |
-| **Frontend** | Next.js 16, React 19, TypeScript, Tailwind CSS |
-| **Satellite** | Google Earth Engine (Sentinel-2, MODIS, NASA SMAP) |
-| **Market Data** | AgMarkNet / data.gov.in |
-| **Weather** | Open-Meteo API |
-| **Voice/Language** | Cloud STT V2, Cloud TTS, Cloud Translation API v3 |
-| **Phone** | Twilio Voice + SMS |
-| **Maps** | Google Maps (Geocoding, Distance Matrix, Places) |
-| **Infra** | Docker, Google Cloud Run (asia-south1), Cloud Storage |
+| **AI/LLM** | Gemini 3 Flash (primary) + 5-model fallback chain + Vertex AI |
+| **Voice Streaming** | Gemini Live (WebSocket, real-time audio ↔ text) |
+| **Satellite** | Earth Engine — Sentinel-2 (10m), Sentinel-1 SAR, MODIS Terra (1km), NASA SMAP (9km) |
+| **Backend** | FastAPI, Python 3.11+, fully async, uvicorn |
+| **Frontend** | Next.js 16, React 19, TypeScript, Tailwind CSS 4, WCAG 2.2 AAA |
+| **Market Data** | AgMarkNet / data.gov.in (112 commodities, 90-day price history + weather correlation) |
+| **Weather** | Open-Meteo (5-day forecast + 90-day historical for GDD) |
+| **Voice/Language** | Cloud STT V2, Cloud TTS Wavenet (10 voices), Cloud Translation v3 (22 languages) |
+| **Phone** | Twilio Voice + SMS (TwiML webhooks, SMS summary after call) |
+| **Maps** | Google Maps (Geocoding, Distance Matrix, Places for KVK search) |
+| **Cache** | L0: Pre-computed satellite (O(1)) + L1: In-memory + L2: Cloud Storage |
+| **Deployment** | VM with systemd + GitHub webhook auto-deploy (build + restart) |
+| **Testing** | 140-test E2E suite covering all endpoints, edge cases, performance |
+| **Accessibility** | WCAG 2.2 AAA — 7:1 contrast, ARIA labels, skip nav, reduced motion, 44px targets |
 
 ---
 
@@ -147,9 +245,9 @@ Fetches live prices from 7,000+ mandis via AgMarkNet. Calculates net profit per 
 
 | Metric | Mechanism | Value |
 |--------|-----------|-------|
-| Mandi arbitrage gain | Best mandi vs local mandi (net of transport & commission) | **+₹12,000/season** |
-| Spoilage prevention | Weather-timed harvesting avoids post-harvest losses | **+₹10,000/season** |
-| Input cost savings | Satellite-guided irrigation & spray timing | **+₹2,000/season** |
+| Mandi arbitrage gain | Best mandi vs local mandi (net of transport, commission, spoilage) | **+₹12,000/season** |
+| Spoilage prevention | Weather-timed harvesting + satellite-guided spray timing | **+₹10,000/season** |
+| Input cost savings | Satellite-guided irrigation (SAR + SMAP moisture data) | **+₹2,000/season** |
 | Time saved per query | Voice call vs visiting mandi + KVK + checking weather separately | **~4 hours** |
 | Income increase per farmer | Combined effect across 2 seasons | **+30% (~₹34,000/year)** |
 | Total value created (Year 1) | 100,000 farmers × ₹34,000 | **₹3.4 billion** |
@@ -159,18 +257,39 @@ Fetches live prices from 7,000+ mandis via AgMarkNet. Calculates net profit per 
 **Without KisanMind:**
 - Sells at local Solan mandi at ₹1,800/quintal
 - Loses ₹10,000/year to rain-damaged harvest
+- Doesn't know soil is drying at root level (SMAP data unavailable to farmer)
 - Annual tomato income: ₹50,000
 
 **With KisanMind:**
-- Satellite confirms NDVI 0.72 (healthy)
+- Sentinel-2 confirms NDVI 0.54 (moderate health, needs attention)
+- Sentinel-1 SAR shows soil is moist — rules out water stress
+- SMAP shows root-zone moisture adequate — no deep irrigation needed
+- Cross-validation flags: "NDVI declining despite adequate moisture → possible pest issue → refer KVK"
 - Weather warns of rain in 72 hours — harvest today
-- MandiMitra finds Shimla mandi at ₹2,400/quintal (60km away); after transport & commission, net ₹2,104/quintal vs ₹1,728 locally
+- MandiMitra finds Shimla mandi at ₹2,400/quintal (60km); after transport + commission + spoilage, net ₹2,104/quintal vs ₹1,728 locally
+- 90-day price history shows prices are above average → sell now signal
 
 **Result:** ₹376/quintal × 30 quintals = **₹11,280 gained** + ₹10,000 spoilage saved = **₹21,280 per harvest**
 
 ---
 
+## Key Differentiators
+
+| Feature | KisanMind | Typical Agri Apps |
+|---------|-----------|-------------------|
+| **Satellite sources** | 4 (Sentinel-2, SAR, MODIS, SMAP) | 0–1 |
+| **Cross-validation** | Multi-source conflict detection | None |
+| **Price intelligence** | Net profit after transport + spoilage + 90-day history | Raw prices only |
+| **Languages** | 22 scheduled Indian languages | 1–2 |
+| **Interface** | Voice-first (phone call) | App/text only |
+| **Cache strategy** | 3-tier O(1) lookup | None or basic |
+| **Accessibility** | WCAG 2.2 AAA | Not considered |
+| **Data transparency** | Confidence scores + data age + source citations | Black box |
+
+---
+
 <p align="center">
   <sub>&copy; 2026 KisanMind · Submitted for ET AI Hackathon 2026 — Phase II</sub><br>
-  <sub>Problem 5: Domain-Specialized AI Agents — Satellite-to-Voice Agricultural Intelligence</sub>
+  <sub>Problem 5: Domain-Specialized AI Agents — Satellite-to-Voice Agricultural Intelligence</sub><br>
+  <sub>100% real data · 4 satellites · 112 crops · 22 languages · Zero hallucination</sub>
 </p>
