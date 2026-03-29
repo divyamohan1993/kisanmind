@@ -42,7 +42,7 @@ export default function useGeolocation() {
         // GPS denied or failed — fall back to IP-based
         fetchIPLocation();
       },
-      { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
     );
   }, []);
 
