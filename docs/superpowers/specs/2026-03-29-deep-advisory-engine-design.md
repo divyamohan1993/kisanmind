@@ -321,3 +321,40 @@ RULES FOR SPEAKING TO FARMER:
 - Greeting sounds natural, not robotic
 - Advisory is under 150 words when spoken
 - KVK name, distance, and phone number included in every response
+
+---
+
+## 10. 2G Voice-Only Additions
+
+### 10.1 SMS Summary After Every Twilio Call
+After voice advisory ends, send SMS via Twilio with key numbers:
+```
+KisanMind - Aaj ka update:
+Fasal: Tomato, Solan
+Best Mandi: Azadpur ₹3,100/q (6 ghante)
+Local Mandi: Solan ₹2,400/q (1 ghanta)
+Mausam: Baarish Thu (15mm)
+KVK Solan: 12km, 1800-180-1551
+```
+Farmer can show SMS to family, truck driver, broker. Works on any ₹500 phone.
+
+### 10.2 Quantity-Based Profit Calculation
+Farmer says "mere paas 20 quintal maal hai". System calculates total money in hand:
+- "20 quintal × ₹3,100 = ₹62,000. Transport ₹4,200. Commission ₹2,480. Haath mein: ₹55,320."
+Extract quantity from speech via Gemini. Default to 10 quintals if not mentioned.
+
+### 10.3 Repeat / Slow Down Commands
+- "phir se batao" → repeat last advisory at speaking rate 0.7
+- "dheere bolo" → repeat slower
+- "mandi wala part batao" → repeat only mandi section
+- "KVK ka number batao" → repeat just KVK info
+
+### 10.4 Daily Action Item ("Aaj kya karun?")
+Ultra-short mode — 10 seconds, one action:
+- "Aaj subah 6 baje paani dein. Kal baarish aa rahi hai toh kal mat dena."
+- "Aaj maal todne ka achha din hai — mausam saaf hai aur rate achha chal raha hai."
+Cross-references weather + NDVI + price to give single most important action.
+
+### 10.5 Multi-Crop in One Call
+Farmer says "tomato aur capsicum dono ka rate batao". System runs advisory for both crops:
+- "Tomato: Azadpur ₹3,100. Capsicum: Azadpur ₹4,200. Pehle capsicum becho."
