@@ -381,32 +381,77 @@ async def reverse_geocode(lat: float, lon: float) -> dict:
     }
 
 
-AGMARKNET_CROP_NAMES = {
-    "okra": ["Bhindi(Ladies Finger)", "Lady Finger", "bhindi", "okra"],
-    "tomato": ["tomato"],
-    "potato": ["potato"],
-    "onion": ["onion"],
-    "wheat": ["wheat"],
-    "rice": ["rice", "paddy"],
-    "maize": ["maize"],
-    "cotton": ["cotton"],
-    "sugarcane": ["sugarcane"],
-    "apple": ["apple"],
-    "mango": ["mango"],
-    "banana": ["banana"],
-    "chilli": ["chilli", "green chilli"],
-    "cauliflower": ["cauliflower"],
-    "eggplant": ["brinjal"],
-    "spinach": ["spinach"],
-    "peas": ["peas", "green peas"],
-    "lemon": ["lemon"],
-    "mustard": ["mustard", "rapeseed & mustard"],
-    "chickpea": ["bengal gram", "gram"],
-    "lentil": ["masur", "lentil"],
-    "soybean": ["soyabean"],
-    "sorghum": ["jowar"],
-    "pearl millet": ["bajra"],
-}
+# ---------------------------------------------------------------------------
+# AgMarkNet commodity list — fetched live at startup for dynamic crop matching
+# ---------------------------------------------------------------------------
+_agmarknet_commodities: list[str] = []  # Populated at startup
+
+
+def _fetch_agmarknet_commodities():
+    """Fetch all unique commodity names from AgMarkNet at startup."""
+    global _agmarknet_commodities
+    try:
+        import requests
+        url = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
+        params = {"api-key": AGMARKNET_API_KEY, "format": "json", "limit": 1000, "offset": 0}
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        commodities = set()
+        for r in data.get("records", []):
+            c = r.get("commodity", "")
+            if c:
+                commodities.add(c)
+        _agmarknet_commodities = sorted(commodities)
+        log.info(f"AgMarkNet commodities loaded: {len(_agmarknet_commodities)} items")
+    except Exception as e:
+        log.warning(f"Failed to fetch AgMarkNet commodities: {e}")
+        # Hardcoded fallback
+        _agmarknet_commodities = [
+            "Apple", "Banana", "Bhindi(Ladies Finger)", "Brinjal", "Cabbage",
+            "Capsicum", "Carrot", "Cauliflower", "Chilly Capsicum", "Cotton",
+            "Garlic", "Ginger(Green)", "Grapes", "Green Peas", "Lemon",
+            "Maize", "Mango", "Onion", "Paddy(Dhan)", "Potato",
+            "Rice", "Sugarcane", "Tomato", "Wheat",
+        ]
+
+
+_fetch_agmarknet_commodities()
+
+
+def _match_agmarknet_commodity(crop: str) -> list[str]:
+    """Find matching AgMarkNet commodity names for a given crop.
+    Uses substring matching against the live commodity list."""
+    crop_low = crop.lower().strip()
+    matches = []
+
+    # Exact match first
+    for c in _agmarknet_commodities:
+        if c.lower() == crop_low:
+            return [c]
+
+    # Substring match — crop name appears anywhere in commodity name
+    for c in _agmarknet_commodities:
+        c_low = c.lower()
+        if crop_low in c_low or c_low in crop_low:
+            matches.append(c)
+
+    # Common English→AgMarkNet mappings for edge cases
+    manual = {
+        "okra": "Bhindi(Ladies Finger)",
+        "eggplant": "Brinjal",
+        "chickpea": "Bengal Gram(Gram)(Whole)",
+        "lentil": "Masur Dal",
+        "soybean": "Soyabean",
+        "sorghum": "Jowar(Sorghum)",
+        "pearl millet": "Bajra(Pearl Millet)",
+        "mustard": "Mustard",
+        "peas": "Green Peas",
+    }
+    if crop_low in manual and manual[crop_low] not in matches:
+        matches.insert(0, manual[crop_low])
+
+    return matches if matches else [crop]
 
 
 async def fetch_mandi_prices(crop: str, state: str) -> list[dict]:
@@ -414,12 +459,11 @@ async def fetch_mandi_prices(crop: str, state: str) -> list[dict]:
     records = []
     source = "unknown"
 
-    # Build list of crop names to try (AgMarkNet uses different names)
+    # Build list of crop names to try (dynamically matched from AgMarkNet's commodity list)
     crop_lower = crop.lower().replace(" ", "_")
-    crop_variants = AGMARKNET_CROP_NAMES.get(crop.lower(), [crop.lower()])
-    crop_variants = [crop.lower()] + [v for v in crop_variants if v != crop.lower()]
+    crop_variants = _match_agmarknet_commodity(crop)
     for variant in crop_variants:
-        variant_key = variant.replace(" ", "_")
+        variant_key = variant.lower().replace(" ", "_").replace("(", "").replace(")", "")
         gcs_url = f"https://storage.googleapis.com/kisanmind-cache/mandi-prices/agmarknet_{variant_key}.json"
         try:
             async with httpx.AsyncClient(timeout=8) as client:
@@ -446,7 +490,7 @@ async def fetch_mandi_prices(crop: str, state: str) -> list[dict]:
                 "api-key": AGMARKNET_API_KEY,
                 "format": "json",
                 "limit": 20,
-                "filters[commodity]": variant if variant[0].isupper() else variant.title(),
+                "filters[commodity]": variant,
                 "filters[state]": state,
             }
             headers = {
