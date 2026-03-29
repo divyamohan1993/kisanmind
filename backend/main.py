@@ -259,6 +259,7 @@ class AdvisoryRequest(BaseModel):
     language: str = "hi"
     intent: str = "full_advisory"
     quantity_quintals: float = 0
+    sowing_date: str = ""  # ISO format YYYY-MM-DD, empty if unknown
 
 
 class TTSRequest(BaseModel):
@@ -612,6 +613,156 @@ async def fetch_weather(lat: float, lon: float) -> dict:
     }
 
 
+async def fetch_historical_weather(lat: float, lon: float, days_back: int = 90) -> list[dict]:
+    """Fetch historical daily temperatures from Open-Meteo (free, no key needed).
+    Used for accurate GDD (Growing Degree Days) calculation from sowing date."""
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
+        "timezone": "auto",
+        "past_days": days_back,
+        "forecast_days": 0,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+        daily = data.get("daily", {})
+        dates = daily.get("time", [])
+        max_temps = daily.get("temperature_2m_max", [])
+        min_temps = daily.get("temperature_2m_min", [])
+        precip = daily.get("precipitation_sum", [])
+
+        history = []
+        for i in range(len(dates)):
+            history.append({
+                "date": dates[i],
+                "max_temp_c": max_temps[i] if i < len(max_temps) else None,
+                "min_temp_c": min_temps[i] if i < len(min_temps) else None,
+                "precipitation_mm": precip[i] if i < len(precip) else None,
+            })
+        return history
+    except Exception as e:
+        log.warning(f"Historical weather fetch failed: {e}")
+        return []
+
+
+def cross_validate_data_sources(
+    ndvi_data: Optional[dict],
+    ndvi_trajectory: dict,
+    weather: dict,
+    price_trend: dict,
+    growth_stage: dict,
+) -> list[dict]:
+    """Cross-validate data sources and flag conflicts for transparent advisory.
+    Returns list of conflict/agreement observations with recommended actions."""
+    observations = []
+
+    # 1. NDVI declining + adequate rain = possible pest/root issue, NOT water stress
+    if ndvi_data and ndvi_trajectory:
+        trajectory = ndvi_trajectory.get("trajectory", "")
+        daily = weather.get("daily_forecast", [])
+        recent_rain = sum(d.get("precipitation_mm", 0) or 0 for d in daily[:3])
+
+        if trajectory == "declining" and recent_rain > 10:
+            observations.append({
+                "type": "CONFLICT",
+                "sources": ["satellite", "weather"],
+                "finding": "Crop health declining despite adequate rainfall",
+                "action": "REFER_KVK",
+                "confidence": "HIGH",
+                "detail": "Satellite shows declining health but rain is adequate. This may indicate pest, disease, or root issue — NOT water stress. Do not recommend irrigation. Refer to KVK for field inspection.",
+            })
+        elif trajectory == "declining" and recent_rain < 2:
+            observations.append({
+                "type": "AGREEMENT",
+                "sources": ["satellite", "weather"],
+                "finding": "Crop health declining with no recent rain — likely water stress",
+                "action": "IRRIGATE",
+                "confidence": "HIGH",
+                "detail": "Satellite and weather both confirm: no rain and declining crop health. Water stress is the most likely cause. Recommend immediate irrigation.",
+            })
+
+    # 2. NDVI healthy + farmer on call reports problem = satellite data may be old
+    if ndvi_data:
+        days_old = 0
+        try:
+            days_old = (datetime.utcnow() - datetime.strptime(ndvi_data.get("image_date", ""), "%Y-%m-%d")).days
+        except (ValueError, TypeError):
+            pass
+        if days_old > 5:
+            observations.append({
+                "type": "CAVEAT",
+                "sources": ["satellite"],
+                "finding": f"Satellite data is {days_old} days old",
+                "action": "DISCLOSE_AGE",
+                "confidence": "HIGH",
+                "detail": f"Any field activity in the last {days_old} days (irrigation, spraying, harvesting) will NOT be reflected. Farmer's own observation of the field is more current than this data.",
+            })
+
+    # 3. Price rising + high arrivals = price may not sustain
+    if price_trend:
+        trend = price_trend.get("trend", "")
+        # We can infer high arrivals if many mandis report prices (more data = more arrivals)
+        data_points = price_trend.get("data_points", 0)
+        if trend == "rising" and data_points > 10:
+            observations.append({
+                "type": "CAVEAT",
+                "sources": ["price"],
+                "finding": "Price rising but high market activity detected",
+                "action": "HEDGE",
+                "confidence": "MEDIUM",
+                "detail": "Prices are up but many mandis are reporting — this means supply is also high. Price rise may not sustain. Advise selling a portion now, holding rest.",
+            })
+
+    # 4. Growth stage near harvest + NDVI plateauing + good weather = harvest window
+    if growth_stage and ndvi_trajectory:
+        stage = growth_stage.get("stage", "")
+        trajectory = ndvi_trajectory.get("trajectory", "")
+        daily = weather.get("daily_forecast", [])
+        rain_next_3 = sum(d.get("precipitation_mm", 0) or 0 for d in daily[:3])
+
+        if stage in ("harvest_ready", "ripening", "maturation", "grain_filling") and trajectory == "plateauing" and rain_next_3 < 5:
+            observations.append({
+                "type": "AGREEMENT",
+                "sources": ["satellite", "weather", "growth_stage"],
+                "finding": "All indicators suggest good harvest window",
+                "action": "HARVEST_NOW",
+                "confidence": "HIGH",
+                "detail": f"Crop at {stage} stage, growth plateaued (satellite), weather clear for 3 days. This is an optimal harvest window.",
+            })
+        elif stage in ("harvest_ready", "ripening", "maturation", "grain_filling") and rain_next_3 > 10:
+            observations.append({
+                "type": "WARNING",
+                "sources": ["weather", "growth_stage"],
+                "finding": "Rain expected during harvest-ready stage",
+                "action": "HARVEST_BEFORE_RAIN",
+                "confidence": "HIGH",
+                "detail": f"Crop at {stage} stage. Rain of {rain_next_3}mm expected in next 3 days. Harvest BEFORE the rain to avoid crop damage and quality loss.",
+            })
+
+    # 5. Frost warning for sensitive crops
+    if growth_stage:
+        stage = growth_stage.get("stage", "")
+        daily = weather.get("daily_forecast", [])
+        frost_days = [d for d in daily[:3] if (d.get("min_temp_c") or 99) < 4]
+        if frost_days and stage in ("flowering", "fruit_setting", "fruit_development"):
+            observations.append({
+                "type": "WARNING",
+                "sources": ["weather", "growth_stage"],
+                "finding": f"Frost risk during critical {stage} stage",
+                "action": "PROTECT_CROP",
+                "confidence": "HIGH",
+                "detail": f"Temperature dropping to {frost_days[0]['min_temp_c']}°C. Crop at {stage} stage is highly vulnerable. Cover crop tonight or use smudge pots.",
+            })
+
+    return observations
+
+
 def compute_advisory_confidence(
     ndvi_data: Optional[dict],
     ndvi_trajectory: dict,
@@ -738,6 +889,27 @@ async def find_nearest_kvk(lat: float, lon: float) -> Optional[dict]:
         return {"name": "KVK", "address": "Search unavailable", "phone": "1800-180-1551", "distance_km": None, "helpline": "1800-180-1551"}
 
 
+def _build_cross_validation_section(cross_validation: list[dict] = None) -> str:
+    """Build cross-validation findings section for Gemini prompt."""
+    if not cross_validation:
+        return ""
+    lines = ["CROSS-VALIDATION FINDINGS (prioritize these in your advisory):"]
+    for cv in cross_validation:
+        action_map = {
+            "REFER_KVK": "Recommend KVK visit — do NOT guess the cause.",
+            "IRRIGATE": "Recommend irrigation.",
+            "HARVEST_NOW": "Recommend harvesting now.",
+            "HARVEST_BEFORE_RAIN": "Urgently recommend harvesting before rain.",
+            "PROTECT_CROP": "Recommend crop protection measures.",
+            "HEDGE": "Hedge this advice — present both sides.",
+            "DISCLOSE_AGE": "Explicitly mention data age and its limitation.",
+        }
+        action_text = action_map.get(cv.get("action", ""), cv.get("action", ""))
+        lines.append(f"  [{cv['type']}] {cv['finding']}. {action_text}")
+        lines.append(f"    Detail: {cv['detail']}")
+    return "\n".join(lines)
+
+
 async def generate_advisory_with_gemini(
     language: str,
     location_name: str,
@@ -754,6 +926,7 @@ async def generate_advisory_with_gemini(
     confidence: dict = None,
     nearest_kvk: dict = None,
     quantity_quintals: float = 0,
+    cross_validation: list[dict] = None,
 ) -> str:
     """Send pre-computed inferences to Gemini and get a human, conversational advisory."""
     language_name = LANGUAGE_NAMES.get(language, "Hindi")
@@ -894,6 +1067,8 @@ WEATHER (today's forecast from Open-Meteo):
 
 {kvk_section}
 
+{_build_cross_validation_section(cross_validation)}
+
 OUTPUT FORMAT (exactly 5 short sections, in this order):
 1. Crop health (1-2 sentences, state satellite data age)
 2. Weather action (1-2 sentences, specific DO or DON'T with date)
@@ -964,18 +1139,75 @@ CROP_GDD_STAGES = {
 }
 
 
-def estimate_growth_stage(crop: str, weather_data: dict) -> dict:
-    """Estimate crop growth stage from accumulated GDD using weather data."""
+def estimate_growth_stage(crop: str, weather_data: dict, sowing_date: str = "", historical_weather: list[dict] = None) -> dict:
+    """Estimate crop growth stage from accumulated GDD.
+    If sowing_date + historical_weather are provided, uses REAL GDD (HIGH confidence).
+    Otherwise falls back to forecast-based estimate (MEDIUM confidence)."""
     crop_lower = crop.lower().strip()
     crop_info = CROP_GDD_STAGES.get(crop_lower)
     if not crop_info:
-        return {"stage": "unknown", "gdd_accumulated": 0, "confidence": "LOW", "detail": f"No GDD model available for {crop}."}
+        return {"stage": "unknown", "gdd_accumulated": 0, "confidence": "LOW", "detail": f"No GDD model available for {crop}.", "method": "none", "days_since_sowing": None}
 
     t_base = crop_info["t_base"]
     stages = crop_info["stages"]
 
-    # Accumulate GDD from weather forecast (approximate — uses forecast as proxy)
-    # In a real scenario this would use historical weather from sowing date
+    # --- METHOD 1: Real GDD from sowing date + historical weather (HIGH confidence) ---
+    if sowing_date and historical_weather:
+        try:
+            sow_dt = datetime.strptime(sowing_date, "%Y-%m-%d")
+            days_since_sowing = (datetime.utcnow() - sow_dt).days
+
+            # Filter historical weather from sowing date onwards
+            total_gdd = 0
+            days_counted = 0
+            for d in historical_weather:
+                try:
+                    d_date = datetime.strptime(d["date"], "%Y-%m-%d")
+                except (ValueError, KeyError):
+                    continue
+                if d_date >= sow_dt:
+                    t_max = d.get("max_temp_c")
+                    t_min = d.get("min_temp_c")
+                    if t_max is not None and t_min is not None:
+                        daily_gdd = max(0, (t_max + t_min) / 2 - t_base)
+                        total_gdd += daily_gdd
+                        days_counted += 1
+
+            if days_counted > 0:
+                avg_daily_gdd = total_gdd / days_counted
+
+                # Find current stage
+                current_stage = stages[0][1]
+                next_stage = None
+                gdd_to_next = 0
+                for idx, (gdd_threshold, stage_name) in enumerate(stages):
+                    if total_gdd >= gdd_threshold:
+                        current_stage = stage_name
+                        if idx + 1 < len(stages):
+                            next_stage = stages[idx + 1][1]
+                            gdd_to_next = stages[idx + 1][0] - total_gdd
+                    else:
+                        break
+
+                days_to_next = round(gdd_to_next / avg_daily_gdd) if avg_daily_gdd > 0 and gdd_to_next > 0 else None
+
+                return {
+                    "stage": current_stage,
+                    "gdd_accumulated": round(total_gdd),
+                    "avg_daily_gdd": round(avg_daily_gdd, 1),
+                    "days_since_sowing": days_since_sowing,
+                    "sowing_date": sowing_date,
+                    "next_stage": next_stage,
+                    "days_to_next_stage": days_to_next,
+                    "confidence": "HIGH",
+                    "method": "real_gdd",
+                    "detail": f"Day {days_since_sowing} since sowing ({sowing_date}). Accumulated {round(total_gdd)} GDD. Stage: {current_stage}."
+                        + (f" Next stage ({next_stage}) in approx {days_to_next} days." if days_to_next else ""),
+                }
+        except (ValueError, TypeError) as e:
+            log.warning(f"Real GDD calculation failed: {e}, falling back to estimate")
+
+    # --- METHOD 2: Estimate from forecast (MEDIUM confidence) ---
     daily = weather_data.get("daily_forecast", [])
     total_gdd = 0
     for d in daily:
@@ -985,13 +1217,10 @@ def estimate_growth_stage(crop: str, weather_data: dict) -> dict:
             daily_gdd = max(0, (t_max + t_min) / 2 - t_base)
             total_gdd += daily_gdd
 
-    # Since we only have 5-day forecast, estimate season GDD from average daily GDD
     avg_daily_gdd = total_gdd / len(daily) if daily else 15
-    # Typical Indian crop season is 90-150 days — estimate total accumulated GDD
-    # Use midpoint of season (75 days) as rough estimate
+    # Use midpoint of typical season (75 days) as rough estimate
     estimated_total_gdd = avg_daily_gdd * 75
 
-    # Find current stage
     current_stage = stages[0][1]
     for gdd_threshold, stage_name in stages:
         if estimated_total_gdd >= gdd_threshold:
@@ -1001,8 +1230,13 @@ def estimate_growth_stage(crop: str, weather_data: dict) -> dict:
         "stage": current_stage,
         "gdd_accumulated": round(estimated_total_gdd),
         "avg_daily_gdd": round(avg_daily_gdd, 1),
+        "days_since_sowing": None,
+        "sowing_date": None,
+        "next_stage": None,
+        "days_to_next_stage": None,
         "confidence": "MEDIUM",
-        "detail": f"Estimated stage: {current_stage} (approx {round(estimated_total_gdd)} GDD at avg {round(avg_daily_gdd, 1)} GDD/day).",
+        "method": "estimated",
+        "detail": f"Estimated stage: {current_stage} (approx {round(estimated_total_gdd)} GDD). For precise staging, tell us your sowing date.",
     }
 
 
@@ -1384,11 +1618,13 @@ async def _run_advisory(req: AdvisoryRequest):
             crop = "Tomato"
         log.info(f"Auto-detected crop: {crop}")
 
-    # 1. Geocode + weather + NDVI + KVK in PARALLEL
+    # 1. Geocode + weather + NDVI + KVK + historical weather in PARALLEL
     location_task = asyncio.create_task(reverse_geocode(req.latitude, req.longitude))
     weather_task = asyncio.create_task(fetch_weather(req.latitude, req.longitude))
     ndvi_task = asyncio.create_task(fetch_ndvi(req.latitude, req.longitude))
     kvk_task = asyncio.create_task(find_nearest_kvk(req.latitude, req.longitude))
+    # Historical weather for real GDD — fetch 120 days of past temperatures
+    hist_weather_task = asyncio.create_task(fetch_historical_weather(req.latitude, req.longitude, days_back=120))
 
     location = await location_task
     log.info(f"Location: {location}")
@@ -1428,13 +1664,22 @@ async def _run_advisory(req: AdvisoryRequest):
     price_trend = analyze_price_trend(mandis)
     log.info(f"Price trend: {price_trend['trend']} ({price_trend['trend_percent']}%)")
 
-    # 4c. Estimate growth stage
-    growth_stage = estimate_growth_stage(crop, weather)
-    log.info(f"Growth stage: {growth_stage['stage']}")
+    # 4c. Get historical weather for real GDD calculation
+    historical_weather = await hist_weather_task
+    sowing_date = req.sowing_date or ""
 
-    # 4d. Compute confidence scores
+    # 4d. Estimate growth stage — uses real GDD if sowing date provided, otherwise estimate
+    growth_stage = estimate_growth_stage(crop, weather, sowing_date=sowing_date, historical_weather=historical_weather)
+    log.info(f"Growth stage: {growth_stage['stage']} (method: {growth_stage.get('method', '?')}, confidence: {growth_stage['confidence']})")
+
+    # 4e. Compute confidence scores
     confidence = compute_advisory_confidence(ndvi_data, ndvi_trajectory, weather, price_trend, mandis)
     log.info(f"Advisory confidence: {confidence['overall']['level']} ({confidence['overall']['score']})")
+
+    # 4f. Cross-validate data sources for conflict detection
+    cross_validation = cross_validate_data_sources(ndvi_data, ndvi_trajectory, weather, price_trend, growth_stage)
+    if cross_validation:
+        log.info(f"Cross-validation: {len(cross_validation)} observations — {[cv['type'] for cv in cross_validation]}")
 
     # 5. Get nearest KVK
     nearest_kvk = await kvk_task
@@ -1466,6 +1711,7 @@ async def _run_advisory(req: AdvisoryRequest):
         confidence=confidence,
         nearest_kvk=nearest_kvk,
         quantity_quintals=req.quantity_quintals,
+        cross_validation=cross_validation,
     )
 
     response_data = {
@@ -1481,6 +1727,7 @@ async def _run_advisory(req: AdvisoryRequest):
         "growth_stage": growth_stage,
         "confidence": confidence,
         "nearest_kvk": nearest_kvk,
+        "cross_validation": cross_validation if cross_validation else [],
         "advisory": advisory_text,
         "sources": {
             "mandi_prices": "AgMarkNet / data.gov.in (real-time)",
@@ -1489,6 +1736,8 @@ async def _run_advisory(req: AdvisoryRequest):
             "advisory": "Gemini 3.1 Flash",
             "geocoding": "Google Maps Geocoding API",
             "nearest_kvk": "Google Places API",
+            "historical_weather": "Open-Meteo Historical API (120 days)",
+            "cross_validation": "Multi-source conflict detection engine",
         },
     }
 
@@ -1829,14 +2078,15 @@ async def twilio_process_speech(request: Request):
         session = _call_sessions.get(caller, {})
 
         # Extract intent from speech using Gemini with dialect awareness
-        intent_prompt = f"""Extract crop, location, and intent from this Indian farmer's speech. The farmer may be speaking Hindi, Tamil, Telugu, Bengali, or English.
+        intent_prompt = f"""Extract crop, location, sowing date, and intent from this Indian farmer's speech. The farmer may be speaking Hindi, Tamil, Telugu, Bengali, or English.
 Understand dialects: tamatar/tamaatar=tomato, gehun=wheat, chawal=rice, aloo=potato, pyaz=onion, gobhi=cauliflower.
-Previous context: crop={session.get('crop', 'unknown')}, location={session.get('location_name', 'unknown')}
+Understand sowing date references: "2 mahine pehle boya" = 60 days ago, "January mein lagaya" = 2026-01-15, "pichhle saal October" = 2025-10-15.
+Previous context: crop={session.get('crop', 'unknown')}, location={session.get('location_name', 'unknown')}, sowing_date={session.get('sowing_date', 'unknown')}
 
 Speech: "{speech_result}"
 
 Return JSON only:
-{{"crop": "<crop in English or null if not mentioned>", "location": "<location name or null>", "intent": "<full_advisory|weather_check|price_check|kvk_info|daily_action|repeat>", "language": "<detected 2-letter code: hi/en/ta/te/bn/mr/gu/kn/ml/pa>", "quantity_quintals": <number or 0 if not mentioned>}}"""
+{{"crop": "<crop in English or null if not mentioned>", "location": "<location name or null>", "intent": "<full_advisory|weather_check|price_check|kvk_info|daily_action|repeat>", "language": "<detected 2-letter code: hi/en/ta/te/bn/mr/gu/kn/ml/pa>", "quantity_quintals": <number or 0 if not mentioned>, "sowing_date": "<YYYY-MM-DD or null if not mentioned>"}}"""
 
         intent_resp = gemini_client.models.generate_content(
             model="gemini-3-flash-preview", contents=intent_prompt
@@ -1851,6 +2101,7 @@ Return JSON only:
         location_name = intent_data.get("location") or session.get("location_name", "")
         detected_lang = intent_data.get("language", "hi")
         quantity = intent_data.get("quantity_quintals", 0)
+        sowing_date = intent_data.get("sowing_date") or session.get("sowing_date", "")
         locale = LANGUAGE_TO_LOCALE.get(detected_lang, "hi-IN")
 
         # Geocode location
@@ -1869,6 +2120,7 @@ Return JSON only:
             language=detected_lang,
             intent="full_advisory",
             quantity_quintals=quantity,
+            sowing_date=sowing_date,
         )
         result = await _run_advisory(req)
         advisory_text = result["advisory"]
@@ -1881,6 +2133,7 @@ Return JSON only:
             "location_name": location_name or result.get("location", {}).get("location_name", ""),
             "state": result.get("location", {}).get("state", ""),
             "language": detected_lang,
+            "sowing_date": sowing_date,
             "last_advisory": advisory_text,
             "last_advisory_data": result,
             "timestamp": _time.time(),
