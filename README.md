@@ -8,9 +8,10 @@
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" />
   <img src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white" />
   <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat-square&logo=fastapi&logoColor=white" />
-  <img src="https://img.shields.io/badge/Gemini-3.1_Flash-4285F4?style=flat-square&logo=google&logoColor=white" />
-  <img src="https://img.shields.io/badge/Earth_Engine-Sentinel--2-FF6F00?style=flat-square&logo=google-earth&logoColor=white" />
+  <img src="https://img.shields.io/badge/Gemini-3_Flash-4285F4?style=flat-square&logo=google&logoColor=white" />
+  <img src="https://img.shields.io/badge/Earth_Engine-4_Satellites-FF6F00?style=flat-square&logo=google-earth&logoColor=white" />
   <img src="https://img.shields.io/badge/Languages-22-138808?style=flat-square" />
+  <img src="https://img.shields.io/badge/WCAG-2.2_AAA-1a365d?style=flat-square" />
   <img src="https://img.shields.io/github/license/divyamohan1993/kisanmind?style=flat-square" />
 </p>
 
@@ -28,16 +29,16 @@
 
 ---
 
-## The Problem
+## The Problem (Hackathon Problem Statement #5: Domain-Specialized AI Agents)
 
-India's **150 million farming households** make daily decisions worth **₹45 lakh crore annually** with:
+India's **150 million farming households** make daily decisions worth **₹45 lakh crore annually** — blind:
 
-- **Zero satellite visibility** on crop health — farmers can't see what satellites see
-- **No real-time price comparison** across mandis — selling at local price without knowing better options
-- **Generic weather forecasts** — "rain expected" doesn't tell a farmer whether to irrigate, harvest, or spray
-- **Language barrier** — advisory services only in English/Hindi, useless for 60%+ farmers
+- **Can't see what satellites see** — crop health data from 4 satellite constellations exists but is inaccessible
+- **Sell at nearest mandi, not the best one** — no net profit comparison after transport, commission, spoilage
+- **"Rain expected" is useless** — doesn't say whether to irrigate, harvest, or spray for *their* crop at *their* growth stage
+- **60%+ farmers excluded** — advisory services only in English/Hindi
 
-**KisanMind** fuses satellite imagery, mandi prices, weather, and voice into one system accessible through **a single phone call in any of 22 Indian languages**.
+**KisanMind** solves this with **one phone call** — 4 satellites + 112 crop prices + weather + Google Maps logistics, synthesized by Gemini into voice advice in **22 Indian languages**.
 
 ---
 

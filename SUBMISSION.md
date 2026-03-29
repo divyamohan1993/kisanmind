@@ -47,9 +47,11 @@
 
 ---
 
-## Project Overview
+## Project Overview (Problem Statement #5: Domain-Specialized AI Agents)
 
-**KisanMind** is an AI platform that delivers satellite crop health, real-time mandi prices, and hyperlocal weather advisories to Indian farmers — via a single phone call in any of 22 scheduled Indian languages.
+**The problem:** 150M Indian farmers make ₹45 lakh crore in decisions annually — without seeing satellite data, comparing mandi net profits, or getting crop-specific weather actions in their language.
+
+**Our solution:** One phone call. KisanMind fuses **9 real data sources** — 4 satellite constellations, government mandi prices, weather, Google Maps — into personalized voice advice in **22 Indian languages**. Every number from a verified API. Zero fake data.
 
 It fuses **9 real data sources** in real-time:
 
