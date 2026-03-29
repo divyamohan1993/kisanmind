@@ -18,7 +18,7 @@
 <h3 align="center">Satellite-to-Voice Agricultural Intelligence for 150M Indian Farmers</h3>
 
 <p align="center">
-  <b>Real Sentinel-2 NDVI</b> &middot; <b>Live Mandi Prices</b> &middot; <b>5-Day Weather</b> &middot; <b>Voice in 22 Languages</b> &middot; <b>Twilio Phone Calls</b>
+  <b>4 Satellites (Sentinel-2, SAR, MODIS, SMAP)</b> &middot; <b>Live Mandi Prices</b> &middot; <b>5-Day Weather</b> &middot; <b>Voice in 22 Languages</b> &middot; <b>Twilio Phone Calls</b>
 </p>
 
 <p align="center">
@@ -52,14 +52,17 @@ KisanMind responds in **their language** with real data:
 
 > *"Aapki fasal ki sehat madhyam hai — Sentinel-2 NDVI score 0.54. Bhindi ka sabse achha bhav APMC Bhuntar mandi mein 7500 rupaye per quintal hai, 251 km door. Transport kaat ke, aapko 6175 rupaye per quintal milega. 29-30 March ko baarish hone ki sambhavna hai — usse pehle paani na dein aur na hi chhidkav karein."*
 
-This required fusing **6 real data sources** in real-time:
+This required fusing **9 real data sources** in real-time:
 
 1. **GPS** — Browser geolocation detected farmer's exact coordinates
-2. **Sentinel-2** — Earth Engine computed NDVI/EVI/NDWI for crop health
-3. **AgMarkNet** — Government mandi prices from data.gov.in
-4. **Google Maps** — Real driving distances + transport cost to each mandi
-5. **Open-Meteo** — 5-day hyperlocal weather + 120-day historical for growth stage
-6. **Gemini** — Synthesized everything into conversational advice in farmer's language
+2. **Sentinel-2** — NDVI/EVI/NDWI for crop health (10m resolution, via Earth Engine)
+3. **Sentinel-1 SAR** — Radar soil moisture through clouds (C-band VV/VH backscatter)
+4. **MODIS Terra** — Land surface temperature for heat stress detection (1km daily)
+5. **NASA SMAP** — Root-zone soil moisture 0–100cm deep (9km, L4 model)
+6. **AgMarkNet** — Government mandi prices from data.gov.in (112 commodities)
+7. **Google Maps** — Real driving distances + transport cost to each mandi
+8. **Open-Meteo** — 5-day forecast + 90-day historical weather for GDD growth stage
+9. **Gemini 3 Flash** — Synthesized everything into conversational advice in farmer's language
 
 ---
 
@@ -80,7 +83,7 @@ graph TB
     end
 
     subgraph "Real Data Sources"
-        D -->|Earth Engine API| G[Sentinel-2<br/>NDVI / EVI / NDWI]
+        D -->|Earth Engine API| G[4 Satellites<br/>Sentinel-2 NDVI · SAR Moisture<br/>MODIS LST · SMAP Root-Zone]
         D -->|data.gov.in| H[AgMarkNet<br/>Mandi Prices]
         D -->|Open-Meteo| I[Weather<br/>5-Day Forecast]
         D -->|Maps Platform| J[Google Maps<br/>Distance Matrix]
@@ -126,12 +129,12 @@ sequenceDiagram
     G-->>BE: {crop: "tomato", intent: "advisory"}
 
     par Parallel Data Fetch
-        BE->>EE: Compute NDVI/EVI/NDWI
-        BE->>AM: Fetch mandi prices
-        BE->>WX: 5-day forecast
+        BE->>EE: Sentinel-2 NDVI + SAR Moisture + MODIS LST + SMAP Root-Zone
+        BE->>AM: Fetch mandi prices (112 crops)
+        BE->>WX: 5-day forecast + 90-day historical
     end
 
-    EE-->>BE: NDVI: 0.54, Health: Moderate
+    EE-->>BE: NDVI: 0.54, SAR: moist, LST: 31°C, SMAP: adequate
     AM-->>BE: Best: Bhuntar ₹7500/q
     WX-->>BE: Rain on Mar 29-30
 
@@ -173,7 +176,7 @@ sequenceDiagram
 - Dual recommendation: **best mandi** (by profit) + **local mandi** (by distance)
 
 ### Growth Stage Intelligence
-- Estimates growth stage from sowing date + **120-day historical temperature data**
+- Estimates growth stage from sowing date + **90-day historical temperature data**
 - Calculates **Growing Degree Days (GDD)** from real Open-Meteo data
 - Maps to: Seedling → Vegetative → Flowering → Fruiting → Harvest
 - Weather advisories tailored to current growth stage
@@ -209,7 +212,7 @@ Every response includes `data_age_minutes` and `freshness_note`.
 | **Frontend** | Next.js 16, TypeScript, React 19, Tailwind CSS |
 | **Backend** | FastAPI, Python 3.12, async/await, uvicorn |
 | **Market Data** | AgMarkNet / data.gov.in (government commodity prices) |
-| **Weather** | Open-Meteo API (5-day forecast + 120-day historical) |
+| **Weather** | Open-Meteo API (5-day forecast + 90-day historical) |
 | **Maps** | Google Maps Geocoding, Distance Matrix, Places APIs |
 | **Cache** | In-memory L1 + Google Cloud Storage L2 |
 | **Deployment** | Docker on VM (kisanmind.dmj.one) |
@@ -398,7 +401,7 @@ cd frontend && npm install && npm run dev
 | GCS cache response | **~200ms** |
 | Fresh advisory (all APIs) | **15-25s** |
 | Supported crops | **106+** (AgMarkNet catalog) |
-| Satellite resolution | **10m** (Sentinel-2) |
+| Satellite resolution | **10m** (Sentinel-2), **1km** (MODIS), **9km** (SMAP) |
 | Languages | **22** (all scheduled Indian languages) |
 | Voice latency (STT + TTS) | **2-4s** per turn |
 
