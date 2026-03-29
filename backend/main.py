@@ -146,6 +146,24 @@ async def cache_set(key: str, value: dict):
 # Gemini client
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
+# Gemini model with fallback — primary model may be overloaded
+GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+
+def _gemini_generate(contents, config=None):
+    """Call Gemini with model fallback. Tries each model once."""
+    last_err = None
+    for model in GEMINI_MODELS:
+        try:
+            kwargs = {"model": model, "contents": contents}
+            if config:
+                kwargs["config"] = config
+            return gemini_client.models.generate_content(**kwargs)
+        except Exception as e:
+            last_err = e
+            log.warning(f"Gemini {model} failed: {e}, trying next...")
+    raise last_err
+
+
 # Earth Engine initialization (once at startup)
 EE_PROJECT = "dmjone"
 EE_INITIALIZED = False
@@ -1258,7 +1276,7 @@ End with: "Yeh aaj ki data ke hisaab se hai. Final faisla aapka hai."
     loop = asyncio.get_event_loop()
     response = await loop.run_in_executor(
         None,
-        lambda: gemini_client.models.generate_content(model="gemini-3-flash-preview", contents=prompt),
+        lambda: _gemini_generate(prompt),
     )
 
     import re
@@ -1288,7 +1306,7 @@ End with: "Yeh aaj ki data ke hisaab se hai. Final faisla aapka hai."
     async def _verify_in_background():
         try:
             verify_prompt = f"""Fact-check: Are prices/distances/names in this advisory consistent with source data? Advisory: "{text[:400]}" Source: Best={best_mandi['market']} {best_mandi['modal_price']}Rs, Local={local_mandi_name} {local_price}Rs. Return PASS or FAIL:<reason>."""
-            verify_resp = gemini_client.models.generate_content(model="gemini-3-flash-preview", contents=verify_prompt)
+            verify_resp = _gemini_generate(verify_prompt)
             log.info(f"Hallucination check (bg): {verify_resp.text.strip()}")
         except Exception as e:
             log.warning(f"Hallucination bg check failed: {e}")
@@ -2743,7 +2761,7 @@ Return ONLY valid JSON (no markdown, no explanation):
     try:
         _loop = asyncio.get_event_loop()
         response = await _loop.run_in_executor(
-            None, lambda: gemini_client.models.generate_content(model="gemini-3-flash-preview", contents=prompt)
+            None, lambda: _gemini_generate(prompt)
         )
         text = response.text.strip()
         # Strip markdown code fences if present
@@ -2855,9 +2873,8 @@ async def text_chat(req: ChatRequest):
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: gemini_client.models.generate_content(
-                model="gemini-3-flash-preview",
-                contents=contents,
+            lambda: _gemini_generate(
+                contents,
                 config=types.GenerateContentConfig(
                     system_instruction=CHAT_SYSTEM_PROMPT + f"\n\n{location_note}",
                     tools=[types.Tool(function_declarations=[types.FunctionDeclaration(**fd) for fd in tool_decls])],
@@ -2902,9 +2919,8 @@ async def text_chat(req: ChatRequest):
 
                     response2 = await loop.run_in_executor(
                         None,
-                        lambda: gemini_client.models.generate_content(
-                            model="gemini-3-flash-preview",
-                            contents=contents2,
+                        lambda: _gemini_generate(
+                            contents2,
                             config=types.GenerateContentConfig(
                                 system_instruction=CHAT_SYSTEM_PROMPT + f"\n\n{location_note}",
                             ),
