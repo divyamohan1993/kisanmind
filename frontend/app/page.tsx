@@ -164,11 +164,26 @@ export default function Dashboard() {
   const [searchCrop, setSearchCrop] = useState("");
   const [showEnglish, setShowEnglish] = useState(false);
   const [hasFetched, setHasFetched] = useState(false);
+  const [loadingStep, setLoadingStep] = useState(0);
+
+  // Loading step labels shown during initial fetch
+  const LOADING_STEPS = [
+    { label: "Detecting your location...", icon: "pin" },
+    { label: "Fetching mandi prices from AgMarkNet...", icon: "mandi" },
+    { label: "Getting 5-day weather forecast...", icon: "weather" },
+    { label: "Analyzing satellite crop health...", icon: "satellite" },
+    { label: "Generating personalized advisory...", icon: "advisory" },
+  ];
 
   const fetchAdvisory = useCallback(
     async (text?: string, language?: string) => {
       setIsLoading(true);
       setError(null);
+      setLoadingStep(0);
+      // Animate through loading steps to show progress
+      const stepTimer = setInterval(() => {
+        setLoadingStep((prev) => (prev < 4 ? prev + 1 : prev));
+      }, 2500);
       try {
         const body: Record<string, unknown> = {
           location: searchLocation || "Solan",
@@ -237,9 +252,11 @@ export default function Dashboard() {
           }
         }
 
+        clearInterval(stepTimer);
         setData(mapApiToState(result));
         setHasFetched(true);
       } catch (err) {
+        clearInterval(stepTimer);
         setError(err instanceof Error ? err.message : "Failed to fetch advisory");
       }
       setIsLoading(false);
@@ -354,9 +371,34 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Loading skeleton for satellite view */}
+        {/* Loading progress indicator */}
         {isLoading && !data ? (
-          <div className="relative overflow-hidden rounded-2xl border border-white/5 h-64 sm:h-80 lg:h-96 shimmer" />
+          <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-kisan-dark-2 p-6 sm:p-8">
+            <div className="mb-4 text-sm font-medium text-white/60">Loading real data...</div>
+            <div className="space-y-3">
+              {LOADING_STEPS.map((s, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-all duration-500 ${
+                    i < loadingStep ? "bg-healthy/20" : i === loadingStep ? "bg-healthy/30 ring-2 ring-healthy/40" : "bg-white/5"
+                  }`}>
+                    {i < loadingStep ? (
+                      <svg className="h-3.5 w-3.5 text-healthy" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                    ) : i === loadingStep ? (
+                      <div className="h-2.5 w-2.5 rounded-full bg-healthy animate-pulse" />
+                    ) : (
+                      <div className="h-2 w-2 rounded-full bg-white/20" />
+                    )}
+                  </div>
+                  <span className={`text-sm transition-colors duration-500 ${
+                    i < loadingStep ? "text-healthy/70" : i === loadingStep ? "text-white/90 font-medium" : "text-white/30"
+                  }`}>{s.label}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 h-1.5 w-full rounded-full bg-white/5 overflow-hidden">
+              <div className="h-full rounded-full bg-gradient-to-r from-healthy to-sky transition-all duration-700 ease-out" style={{ width: `${((loadingStep + 1) / LOADING_STEPS.length) * 100}%` }} />
+            </div>
+          </div>
         ) : (
           <SatelliteMap
             location={data?.location || "Loading..."}

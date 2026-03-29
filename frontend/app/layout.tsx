@@ -43,28 +43,34 @@ export default function RootLayout({
               </span>
             </Link>
 
-            <nav className="hidden items-center gap-1 md:flex">
+            <nav className="hidden items-center gap-0.5 md:flex">
               <Link
                 href="/talk"
-                className="rounded-lg bg-healthy/10 border border-healthy/20 px-3 py-2 text-sm font-medium text-healthy transition-colors hover:bg-healthy/20"
+                className="rounded-lg bg-healthy/10 border border-healthy/20 px-3 py-1.5 text-xs font-semibold text-healthy transition-colors hover:bg-healthy/20"
               >
-                🎤 Farmer Mode
+                Farmer Mode
               </Link>
               <Link
                 href="/"
-                className="rounded-lg px-3 py-2 text-sm text-white/70 transition-colors hover:bg-white/5 hover:text-white"
+                className="rounded-lg px-2.5 py-1.5 text-xs text-white/60 transition-colors hover:bg-white/5 hover:text-white"
               >
                 Dashboard
               </Link>
               <Link
-                href="/mandi"
-                className="rounded-lg px-3 py-2 text-sm text-white/70 transition-colors hover:bg-white/5 hover:text-white"
+                href="/demo"
+                className="rounded-lg px-2.5 py-1.5 text-xs text-white/60 transition-colors hover:bg-white/5 hover:text-white"
               >
-                Mandi Prices
+                Demo
+              </Link>
+              <Link
+                href="/mandi"
+                className="rounded-lg px-2.5 py-1.5 text-xs text-white/60 transition-colors hover:bg-white/5 hover:text-white"
+              >
+                Mandi
               </Link>
               <Link
                 href="/weather"
-                className="rounded-lg px-3 py-2 text-sm text-white/70 transition-colors hover:bg-white/5 hover:text-white"
+                className="rounded-lg px-2.5 py-1.5 text-xs text-white/60 transition-colors hover:bg-white/5 hover:text-white"
               >
                 Weather
               </Link>
@@ -75,10 +81,14 @@ export default function RootLayout({
                 href="/talk"
                 className="md:hidden flex items-center gap-1 rounded-full bg-healthy/20 border border-healthy/30 px-3 py-1.5 text-xs font-medium text-healthy"
               >
-                🎤 Voice
+                Voice
               </Link>
-              <span className="hidden sm:inline-flex rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-white/60">
-                🛰️ Live
+              <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-healthy/5 border border-healthy/20 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-healthy">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-healthy opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-healthy" />
+                </span>
+                Live
               </span>
             </div>
           </div>

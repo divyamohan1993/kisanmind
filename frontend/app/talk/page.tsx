@@ -622,7 +622,7 @@ export default function TalkPage() {
           <>
             <button
               onClick={startCall}
-              className="relative flex items-center justify-center h-[170px] w-[170px] rounded-full bg-healthy/80 shadow-[0_0_60px_rgba(34,197,94,0.3)] hover:shadow-[0_0_80px_rgba(34,197,94,0.5)] active:scale-95 transition-all"
+              className="relative flex items-center justify-center h-[170px] w-[170px] rounded-full bg-healthy/80 shadow-[0_0_60px_rgba(34,197,94,0.3)] hover:shadow-[0_0_80px_rgba(34,197,94,0.5)] active:scale-95 transition-all phone-glow"
             >
               <span className="absolute inset-0 rounded-full bg-healthy/30 animate-ping [animation-duration:2s]" />
               <span className="absolute inset-[-12px] rounded-full border-2 border-healthy/20 animate-ping [animation-duration:2.5s]" />
@@ -630,6 +630,9 @@ export default function TalkPage() {
             </button>
             <p className="mt-4 text-lg font-medium text-white/70">
               {language === "en" ? "Tap to call KisanMind" : "किसानमाइंड को कॉल करें"}
+            </p>
+            <p className="mt-2 text-xs text-white/30 tracking-wide text-center max-w-[280px]">
+              150M+ Indian Farmers | 22 Languages | Real Satellite + Mandi Data
             </p>
           </>
         ) : callState === "ended" ? null : (

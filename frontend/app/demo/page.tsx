@@ -207,10 +207,12 @@ export default function DemoPage() {
         {/* Value points grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
           {VALUE_POINTS.map((vp, i) => (
-            <div key={i} className="glass-card p-3 text-center">
-              <vp.icon size={20} className="mx-auto mb-1 text-healthy" />
-              <div className="text-xs font-bold text-white/80">{vp.label}</div>
-              <div className="text-[10px] text-white/40 mt-0.5">{vp.detail}</div>
+            <div key={i} className="glass-card glass-card-hover p-4 text-center group">
+              <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-healthy/10 group-hover:bg-healthy/20 transition-colors">
+                <vp.icon size={20} className="text-healthy" />
+              </div>
+              <div className="text-xs font-bold text-white/90">{vp.label}</div>
+              <div className="text-[10px] text-white/40 mt-1 leading-relaxed">{vp.detail}</div>
             </div>
           ))}
         </div>
@@ -454,6 +456,16 @@ export default function DemoPage() {
             </div>
           </div>
         )}
+        {/* Powered by footer */}
+        <div className="mt-12 mb-4 text-center">
+          <div className="text-[10px] uppercase tracking-widest text-white/25 mb-3">Powered by</div>
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-white/40">
+            <span className="flex items-center gap-1.5"><Satellite size={12} className="text-emerald-400" /> Google Earth Engine</span>
+            <span className="flex items-center gap-1.5"><Volume2 size={12} className="text-sky" /> Gemini 2.5 Pro</span>
+            <span className="flex items-center gap-1.5"><TrendingUp size={12} className="text-yellow-400" /> AgMarkNet</span>
+            <span className="flex items-center gap-1.5"><Globe size={12} className="text-white/50" /> Cloud TTS</span>
+          </div>
+        </div>
       </main>
     </div>
   );
