@@ -68,15 +68,16 @@ function downsample(buffer: Float32Array, fromRate: number, toRate: number): Flo
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 export default function TalkPage() {
-  const [language, setLanguageRaw] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("kisanmind_lang") || "hi";
-    }
-    return "hi";
-  });
+  // Always init with "hi" on server AND client to avoid hydration mismatch (#418).
+  // Then sync from localStorage in useEffect after mount.
+  const [language, setLanguageRaw] = useState("hi");
+  useEffect(() => {
+    const saved = localStorage.getItem("kisanmind_lang");
+    if (saved && saved !== "hi") setLanguageRaw(saved);
+  }, []);
   const setLanguage = (lang: string) => {
     setLanguageRaw(lang);
-    if (typeof window !== "undefined") localStorage.setItem("kisanmind_lang", lang);
+    localStorage.setItem("kisanmind_lang", lang);
   };
 
   const [callState, setCallState] = useState<CallState>("pre-call");
@@ -87,7 +88,7 @@ export default function TalkPage() {
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const callActiveRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -236,20 +237,39 @@ export default function TalkPage() {
       streamRef.current = stream;
 
       const source = ctx.createMediaStreamSource(stream);
-      const processor = ctx.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
 
-      processor.onaudioprocess = (e) => {
+      // Use AudioWorklet for mic capture (no deprecation warning)
+      const workletCode = `
+        class PcmProcessor extends AudioWorkletProcessor {
+          process(inputs) {
+            const input = inputs[0];
+            if (input && input[0] && input[0].length > 0) {
+              this.port.postMessage(input[0]);
+            }
+            return true;
+          }
+        }
+        registerProcessor("pcm-processor", PcmProcessor);
+      `;
+      const blob = new Blob([workletCode], { type: "application/javascript" });
+      const workletUrl = URL.createObjectURL(blob);
+      await ctx.audioWorklet.addModule(workletUrl);
+      URL.revokeObjectURL(workletUrl);
+
+      const workletNode = new AudioWorkletNode(ctx, "pcm-processor");
+      workletNodeRef.current = workletNode;
+
+      workletNode.port.onmessage = (e) => {
         if (!callActiveRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        const input = e.inputBuffer.getChannelData(0);
-        const downsampled = downsample(input, ctx.sampleRate, 16000);
+        const float32: Float32Array = e.data;
+        const downsampled = downsample(float32, ctx.sampleRate, 16000);
         const pcmBytes = float32ToInt16(downsampled);
         const base64 = btoa(String.fromCharCode(...new Uint8Array(pcmBytes)));
         wsRef.current.send(JSON.stringify({ type: "audio", data: base64 }));
       };
 
-      source.connect(processor);
-      processor.connect(ctx.destination);
+      source.connect(workletNode);
+      workletNode.connect(ctx.destination);
 
     } catch (err) {
       console.error("Failed to start call:", err);
@@ -267,7 +287,7 @@ export default function TalkPage() {
       wsRef.current = null;
     }
 
-    processorRef?.current?.disconnect();
+    workletNodeRef.current?.disconnect();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
 
