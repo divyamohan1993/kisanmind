@@ -1,0 +1,25 @@
+We built KisanMind for the ET GenAI Hackathon 2026.
+
+The problem: 150M Indian farmers make decisions worth Rs 45 lakh crore annually — without seeing satellite data, without comparing mandi profits, without crop-specific weather actions, and mostly not in their language.
+
+What we built: One phone call. Farmer says their crop in any of 22 Indian languages. In 30 seconds, they get:
+
+- Crop health from 4 satellites (Sentinel-2, SAR, MODIS, NASA SMAP)
+- Best mandi ranked by NET profit (price minus transport, commission, spoilage)
+- Date-specific weather actions ("harvest before Friday's rain")
+- Cross-validated: if satellites say soil is wet but crop is declining, we flag pest — not drought
+
+The math: +26% income per farmer. Rs 29,000/year.
+At 100K farmers: Rs 2.9 billion in value created.
+
+9 real data sources. Zero fake data. Every number from a verified API.
+
+Live: https://kisanmind.dmj.one
+Pitch: https://kisanmind.dmj.one/pitch
+Code: https://github.com/divyamohan1993/kisanmind
+
+Built with: Gemini 3 Flash, Google Earth Engine, AgMarkNet, Open-Meteo, FastAPI, Next.js 16, Cloud TTS/STT, Twilio
+
+Team: Divya Mohan, Kumkum Thakur
+
+#ETGenAIHackathon #KisanMind #Agriculture #AI #Gemini #SatelliteData #IndianFarmers #GoogleCloud #EarthEngine

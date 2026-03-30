@@ -76,7 +76,7 @@ It fuses **9 real data sources** in real-time:
 End-to-end walkthrough: a farmer calls in Hindi, the system detects intent, fetches live data from 4 satellites + mandi prices + weather, cross-validates sources, generates weather-timed advice with sell timing, and responds via voice — all in under 30 seconds.
 
 <!-- Replace VIDEO_ID with the actual YouTube video ID when available -->
-[![KisanMind Pitch Video](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=VIDEO_ID)
+[![KisanMind Pitch Video](https://img.youtube.com/vi/Na_nM2GTswE/maxresdefault.jpg)](https://www.youtube.com/watch?v=Na_nM2GTswE)
 
 ---
 
