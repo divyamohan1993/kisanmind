@@ -479,7 +479,7 @@ export default function TalkPage() {
 
       {/* Footer */}
       <footer className="text-center py-4 text-xs text-gray-700 border-t border-gray-100 mt-8" role="contentinfo">
-        <p>KisanMind · AI Krishi Salahkaar Seva · ET GenAI Hackathon 2026</p>
+        <p>KisanMind · AI Krishi Salahkaar Seva · ET GenAI Hackathon 2026 · <a href="/pitch" className="text-[#1a365d] font-semibold underline hover:text-[#138808]">View Pitch Deck</a></p>
         <p className="mt-1 text-xs">Data: ESA Sentinel-2, Sentinel-1, NASA SMAP, MODIS, AgMarkNet, Open-Meteo</p>
       </footer>
 
