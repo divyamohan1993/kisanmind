@@ -207,10 +207,20 @@ class SatelliteCache:
         if raw.get("ndvi") is not None:
             ndvi_val = raw["ndvi"]
             health = raw.get("health", "unknown")
+            # Guard the legacy EVI scaling bug: older caches stored EVI computed on raw DN,
+            # producing impossible values (~2.0). Null anything outside the valid [-1,1] range
+            # so it can never reach the advisory or the verifier.
+            _evi = raw.get("evi")
+            _evi = _evi if (isinstance(_evi, (int, float)) and -1 <= _evi <= 1) else None
+            # Forward-compat: surface any extended growth indices a newer precompute wrote.
+            _extra = {k: raw[k] for k in (
+                "ndre", "savi", "msavi", "gndvi", "ci_rededge", "psri",
+                "ndmi", "nmdi", "nbr", "lai", "fapar") if raw.get(k) is not None}
             ndvi_data = {
                 "ndvi": ndvi_val,
-                "evi": raw.get("evi"),
+                "evi": _evi,
                 "ndwi": raw.get("ndwi"),
+                "extra_indices": _extra,
                 "trend": "stable",  # From cache we don't have multi-temporal trend
                 "health": health.capitalize() if health != "unknown" else "Unknown",
                 "image_date": self.computed_at[:10] if self.computed_at else "unknown",

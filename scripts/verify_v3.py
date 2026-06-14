@@ -150,6 +150,79 @@ async def test_agroclimate_live():
         check("live data feeds irrigation forecast", bool(irr))
 
 
+async def test_integration_sim():
+    """Replicate main.py's _run_advisory enrichment + verification data-flow (no fastapi),
+    for both the live-EE path (raw bands) and the cache path (stored extra_indices)."""
+    print("\n== integration sim: enrichment + verification data-flow (15+ params) ==")
+    ac = await fetch_agroclimate(30.9, 77.1)
+    extras = {"sar": {"moisture_class": "dry"},
+              "lst": {"lst_day_celsius": 34.0},
+              "smap": {"rootzone_moisture_m3m3": 0.18, "rootzone_class": "low"}}
+
+    # --- live-EE path: ndvi_data carries reflectance bands ---
+    bands = {"B2": 0.04, "B3": 0.07, "B4": 0.06, "B5": 0.14, "B6": 0.26,
+             "B7": 0.30, "B8": 0.34, "B8A": 0.35, "B11": 0.20, "B12": 0.12}
+    ndvi_data_live = {"ndvi": 0.70, "evi": 0.5, "ndwi": -0.65, "bands": bands}
+    imap = {}
+    _evi = ndvi_data_live.get("evi")
+    imap["ndvi"] = ndvi_data_live["ndvi"]
+    imap["evi"] = _evi if (isinstance(_evi, (int, float)) and -1 <= _evi <= 1) else None
+    imap["ndwi_water"] = ndvi_data_live["ndwi"]
+    imap.update(ndvi_data_live.get("extra_indices") or {})
+    if ndvi_data_live.get("bands"):
+        imap.update({k: v for k, v in indices.compute_s2_indices(bands, already_reflectance=True).items()
+                     if v is not None})
+    imap = {k: v for k, v in imap.items() if v is not None}
+    assessment = indices.build_index_assessment(imap)
+    n_params = indices.count_available_parameters(imap, extras, ac)
+    print(f"  live-EE path: {len(imap)} optical indices, {len(assessment)} farmer rows, {n_params} total params")
+    check("live-EE path maps >=15 total growth parameters", n_params >= 15, f"{n_params} params")
+    check("assessment has farmer lines", assessment and all(r["farmer_line"] for r in assessment))
+
+    # --- cache path: ndvi_data with the FULL stored extra_indices a precompute rerun writes ---
+    ndvi_data_cache = {"ndvi": 0.62, "evi": None, "ndwi": -0.57,
+                       "extra_indices": {"ndre": 0.30, "savi": 0.45, "msavi": 0.44, "gndvi": 0.55,
+                                         "ci_rededge": 1.1, "psri": 0.05, "ndmi": 0.22, "nmdi": 0.5,
+                                         "nbr": 0.4, "lai": 1.5, "fapar": 0.6}}
+    imap2 = {"ndvi": ndvi_data_cache["ndvi"], "evi": ndvi_data_cache["evi"],
+             "ndwi_water": ndvi_data_cache["ndwi"]}
+    imap2.update(ndvi_data_cache.get("extra_indices") or {})
+    imap2 = {k: v for k, v in imap2.items() if v is not None}
+    n2 = indices.count_available_parameters(imap2, extras, ac)
+    check("cache path (future precompute) maps >=15 params", n2 >= 15, f"{n2} params")
+
+    # --- predictions from live data ---
+    root = extras["smap"]["rootzone_moisture_m3m3"]
+    fc = ac.get("forecast", {})
+    preds = {
+        "irrigation": prediction.predict_irrigation_need("tomato", root, fc.get("et0_forecast_mm"),
+                                                          fc.get("rain_forecast_mm"),
+                                                          et_today_mm=ac.get("et0_mm_day")),
+        "trajectory": prediction.predict_vegetation_trajectory(None),  # cache => single obs => no extrapolation
+    }
+    check("irrigation prediction present", bool(preds["irrigation"]))
+    check("trajectory refuses single-obs extrapolation",
+          preds["trajectory"].get("method") == "insufficient_observations")
+
+    # --- verification payload + gate (deterministic, no LLM) ---
+    best = {"market": "APMC Bhuntar", "modal_price": 7500, "net_profit_per_quintal": 6175, "distance_km": 120}
+    payload = {
+        "best_mandi": best, "local_mandi": {"market": "Solan", "modal_price": 6000}, "mandis": [best],
+        "indices": imap, "satellite_extras": extras, "agroclimate": ac,
+        "irrigation_forecast": preds["irrigation"],
+        "ndvi_status": indices.classify_ndvi(imap.get("ndvi")),
+        "ndmi_status": indices.classify_ndmi(imap.get("ndmi")),
+        "ndre_status": indices.classify_ndre(imap.get("ndre")),
+    }
+    good = "Crop is healthy. Sell at APMC Bhuntar for Rs 7500, net Rs 6175. Water the crop now."
+    gate = await verification.verify_advisory(good, payload, gemini_call=None, regenerate=None)
+    print(f"  verification verdict: {gate['verdict']}, checks: {len(gate['checks'])}")
+    check("verification runs end-to-end", gate.get("verdict") in ("PASS", "REVIEW", "FAIL"))
+    # Real fare attaches to best mandi.
+    fare = logistics.estimate_transport_fare(best["distance_km"], 15, "tomato")
+    check("fare attaches to recommended mandi", bool(fare) and fare["per_quintal"] > 0)
+
+
 def main():
     test_indices()
     test_prediction()
@@ -159,6 +232,10 @@ def main():
         asyncio.run(test_agroclimate_live())
     except Exception as e:
         check("agroclimate live call (network)", False, f"network error: {e}")
+    try:
+        asyncio.run(test_integration_sim())
+    except Exception as e:
+        check("integration sim", False, f"error: {e}")
 
     print("\n" + "=" * 50)
     n_pass = sum(1 for _, ok in results if ok)

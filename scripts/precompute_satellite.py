@@ -27,6 +27,12 @@ from pathlib import Path
 
 import ee
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+try:
+    from backend import indices as v3_indices  # shared index math (correct EVI scaling)
+except ImportError:
+    v3_indices = None
+
 # ---------------------------------------------------------------------------
 # Earth Engine initialization
 # ---------------------------------------------------------------------------
@@ -161,12 +167,9 @@ def compute_batch(points: list[tuple[float, float]], batch_size: int = 500) -> l
                 .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30))
                 .median()  # Cloud-free composite
             )
-            ndvi = s2.normalizedDifference(["B8", "B4"]).rename("ndvi")
-            evi = s2.expression(
-                "2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))",
-                {"NIR": s2.select("B8"), "RED": s2.select("B4"), "BLUE": s2.select("B2")}
-            ).rename("evi")
-            ndwi = s2.normalizedDifference(["B3", "B8"]).rename("ndwi")
+            # Sample raw S2 bands and compute the full index set in Python (shared module),
+            # which scales DN -> reflectance correctly (fixes the legacy EVI ~2.0 bug).
+            s2_bands = s2.select(["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"])
 
             # --- Sentinel-1 SAR (last 30 days) ---
             s1_start = (end_date - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -200,7 +203,7 @@ def compute_batch(points: list[tuple[float, float]], batch_size: int = 500) -> l
 
             # Combine all bands into one image
             combined = (
-                ndvi.addBands(evi).addBands(ndwi)
+                s2_bands
                 .addBands(s1)
                 .addBands(modis)
                 .addBands(smap)
@@ -228,8 +231,13 @@ def compute_batch(points: list[tuple[float, float]], batch_size: int = 500) -> l
                 lst_day_c = round(lst_day_raw * 0.02 - 273.15, 1) if lst_day_raw else None
                 lst_night_c = round(lst_night_raw * 0.02 - 273.15, 1) if lst_night_raw else None
 
+                # Compute optical indices from sampled raw bands (correct reflectance scaling).
+                _band_keys = ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
+                bands_dn = {b: props.get(b) for b in _band_keys if props.get(b) is not None}
+                idx = v3_indices.compute_s2_indices(bands_dn) if (v3_indices and bands_dn) else {}
+
                 # Classify values
-                ndvi_val = props.get("ndvi")
+                ndvi_val = idx.get("ndvi")
                 vv_val = props.get("VV")
                 sm_root = props.get("sm_rootzone")
 
@@ -279,12 +287,12 @@ def compute_batch(points: list[tuple[float, float]], batch_size: int = 500) -> l
                     else:
                         rootzone_class = "critical"
 
-                results.append({
+                record = {
                     "lat": lat,
                     "lon": lon,
                     "ndvi": round(ndvi_val, 4) if ndvi_val is not None else None,
-                    "evi": round(props.get("evi", 0) or 0, 4) if props.get("evi") is not None else None,
-                    "ndwi": round(props.get("ndwi", 0) or 0, 4) if props.get("ndwi") is not None else None,
+                    "evi": idx.get("evi"),
+                    "ndwi": idx.get("ndwi_water"),
                     "health": health,
                     "vv_db": round(vv_val, 2) if vv_val is not None else None,
                     "vh_db": round(props.get("VH", 0) or 0, 2) if props.get("VH") is not None else None,
@@ -295,7 +303,13 @@ def compute_batch(points: list[tuple[float, float]], batch_size: int = 500) -> l
                     "sm_surface": round(props.get("sm_surface", 0) or 0, 4) if props.get("sm_surface") is not None else None,
                     "sm_rootzone": round(sm_root, 4) if sm_root is not None else None,
                     "rootzone_class": rootzone_class,
-                })
+                }
+                # Extended growth indices (NDRE/SAVI/MSAVI/GNDVI/CIre/PSRI/NDMI/NMDI/NBR/LAI/FAPAR).
+                for _k in ("ndre", "savi", "msavi", "gndvi", "ci_rededge", "psri",
+                           "ndmi", "nmdi", "nbr", "lai", "fapar"):
+                    if idx.get(_k) is not None:
+                        record[_k] = idx[_k]
+                results.append(record)
 
             elapsed = time.time() - t0
             print(f"  Batch {batch_idx + 1}/{total_batches}: {len(features_result)} points in {elapsed:.1f}s")
@@ -329,7 +343,8 @@ def save_cache(results: list[dict], output_dir: str, label: str = ""):
         "valid_points": len(valid),
         "failed_points": len(errors),
         "sources": {
-            "ndvi_evi_ndwi": "Sentinel-2 SR Harmonized (30-day median composite)",
+            "s2_indices": "Sentinel-2 SR (30-day median): NDVI, EVI, SAVI, MSAVI2, NDRE, GNDVI, "
+                          "CIre, PSRI, NDMI, NMDI, NDWI, NBR, LAI, FAPAR (reflectance-correct)",
             "sar_vv_vh": "Sentinel-1 GRD IW (30-day median)",
             "lst": "MODIS Terra MOD11A1 (10-day median)",
             "smap": "NASA SMAP SPL4SMGP L4 (5-day median)",
