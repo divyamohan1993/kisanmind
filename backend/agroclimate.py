@@ -152,7 +152,7 @@ def _interpret(merged: dict) -> dict:
     return out
 
 
-async def fetch_agroclimate(lat: float, lon: float, timeout: float = 18.0) -> dict:
+async def fetch_agroclimate(lat: float, lon: float, timeout: float = 12.0) -> dict:
     """Fetch the combined agro-climate parameter block. Best-effort, never raises.
 
     Returns a normalized dict with raw values, a `forecast` block (for soil-water prediction)

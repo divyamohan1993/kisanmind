@@ -2804,13 +2804,20 @@ async def _run_advisory(req: AdvisoryRequest):
     predictions: dict = {}
     parameters_count = 0
     copernicus = {"available": False}
+    # Bounded awaits — these started in parallel at the top of the request, so they are
+    # almost always already done; the ceiling just guarantees a hung source can never stall.
     try:
-        agroclimate = await agroclimate_task
-        copernicus = await copernicus_task
-        log.info(f"Agro-climate: {len(agroclimate.get('sources', []))} sources, "
-                 f"Copernicus-direct: {copernicus.get('available')}")
+        agroclimate = await asyncio.wait_for(agroclimate_task, timeout=15.0)
     except Exception as e:
-        log.warning(f"v3 agroclimate/copernicus await failed: {e}")
+        log.warning(f"v3 agroclimate await timed out/failed: {e}")
+        agroclimate = {}
+    try:
+        copernicus = await asyncio.wait_for(copernicus_task, timeout=22.0)
+    except Exception as e:
+        log.info(f"v3 copernicus await timed out/failed: {e}")
+        copernicus = {"available": False}
+    log.info(f"Agro-climate: {len(agroclimate.get('sources', []))} sources, "
+             f"Copernicus-direct: {copernicus.get('available')}")
 
     try:
         # Optical parameter map from whatever sources answered (cache, live-EE, Copernicus).

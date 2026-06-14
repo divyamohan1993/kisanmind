@@ -293,12 +293,12 @@ export default function TalkPage() {
             {/* Data sources — visible on desktop */}
             <div className="hidden md:grid grid-cols-3 gap-4 mb-6">
               <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <h2 className="font-semibold text-[#1a365d] text-sm mb-2">🛰 Satellite Data</h2>
+                <h2 className="font-semibold text-[#1a365d] text-sm mb-2">🛰 Satellite + Soil Data</h2>
                 <ul className="text-xs text-gray-700 space-y-1">
-                  <li>Sentinel-2 — Crop health (NDVI)</li>
-                  <li>Sentinel-1 SAR — Soil moisture</li>
-                  <li>MODIS Terra — Surface temperature</li>
-                  <li>NASA SMAP — Root zone moisture</li>
+                  <li>Sentinel-2 — 14 crop-growth indices</li>
+                  <li>SAR + SMAP + NASA POWER — soil & water</li>
+                  <li>MODIS heat · ET water-demand · VPD</li>
+                  <li>Predicts when to irrigate &amp; harvest</li>
                 </ul>
               </div>
               <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -324,7 +324,7 @@ export default function TalkPage() {
             {/* Project info card */}
             <div className="bg-white rounded-lg border border-gray-200 p-4 text-xs text-gray-700">
               <p><strong>KisanMind</strong> uses AI + real satellite data to give personalized farming advice to 150M+ Indian farmers in 22 languages. Voice-first, designed for farmers in the field.</p>
-              <p className="mt-2">Data: ESA Sentinel-2, Sentinel-1 SAR, NASA SMAP, MODIS Terra, AgMarkNet, Open-Meteo | AI: Google Gemini | 22 Indian languages | KVK referral network</p>
+              <p className="mt-2">Data: ESA Sentinel-2/1, NASA SMAP/POWER, MODIS, Open-Meteo, Copernicus, AgMarkNet | 20+ growth parameters, irrigation/harvest prediction, agentic verification | AI: Google Gemini | 22 languages | KVK network</p>
             </div>
           </>
         )}
@@ -387,7 +387,7 @@ export default function TalkPage() {
                           <span className="h-2 w-2 rounded-full bg-[#138808] animate-bounce" />
                           <p className="text-sm font-semibold text-[#1a365d]">Generating your advisory...</p>
                         </div>
-                        <p className="text-xs text-gray-700">Fetching live data from 4 satellites + mandi prices + weather.</p>
+                        <p className="text-xs text-gray-700">Mapping 20+ growth signals from satellites + soil + weather, plus mandi prices.</p>
                         <p className="text-xs text-gray-700 mt-0.5">This may take up to 1 minute. You will hear a <strong>beep</strong> when ready.</p>
                       </div>
                     )}
@@ -480,7 +480,7 @@ export default function TalkPage() {
       {/* Footer */}
       <footer className="text-center py-4 text-xs text-gray-700 border-t border-gray-100 mt-8" role="contentinfo">
         <p>KisanMind · AI Krishi Salahkaar Seva · ET GenAI Hackathon 2026 · <a href="/pitch" className="text-[#1a365d] font-semibold underline hover:text-[#138808]">View Pitch Deck</a></p>
-        <p className="mt-1 text-xs">Data: ESA Sentinel-2, Sentinel-1, NASA SMAP, MODIS, AgMarkNet, Open-Meteo</p>
+        <p className="mt-1 text-xs">Data: ESA Sentinel-2/1, NASA SMAP/POWER, MODIS, Copernicus, AgMarkNet, Open-Meteo</p>
       </footer>
 
       <div className="flex h-1.5" role="presentation"><div className="flex-1 bg-[#FF9933]" /><div className="flex-1 bg-white" /><div className="flex-1 bg-[#138808]" /></div>
