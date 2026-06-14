@@ -58,7 +58,7 @@ async def _fetch_nasa_power(lat: float, lon: float, client: httpx.AsyncClient) -
     end = datetime.utcnow()
     start = end - timedelta(days=12)
     params = {
-        "parameters": "T2M,PRECTOTCORR,ALLSKY_SFC_SW_DWN,EVPTRNS,GWETROOT,GWETTOP",
+        "parameters": "T2M,PRECTOTCORR,ALLSKY_SFC_SW_DWN,EVPTRNS,GWETROOT,GWETTOP,RH2M,WS2M",
         "community": "AG",
         "longitude": round(lon, 4),
         "latitude": round(lat, 4),
@@ -76,6 +76,8 @@ async def _fetch_nasa_power(lat: float, lon: float, client: httpx.AsyncClient) -
         "surface_wetness": _latest_valid(p.get("GWETTOP", {})),
         "air_temp_c": _latest_valid(p.get("T2M", {})),
         "precip_recent_mm": _recent_sum(p.get("PRECTOTCORR", {}), days=7),
+        "relative_humidity": _latest_valid(p.get("RH2M", {})),
+        "wind_speed_ms": _latest_valid(p.get("WS2M", {})),
     }
 
 

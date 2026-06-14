@@ -304,9 +304,11 @@ def compute_batch(points: list[tuple[float, float]], batch_size: int = 500) -> l
                     "sm_rootzone": round(sm_root, 4) if sm_root is not None else None,
                     "rootzone_class": rootzone_class,
                 }
-                # Extended growth indices (NDRE/SAVI/MSAVI/GNDVI/CIre/PSRI/NDMI/NMDI/NBR/LAI/FAPAR).
+                # Extended growth indices (all v3 Sentinel-2 parameters).
                 for _k in ("ndre", "savi", "msavi", "gndvi", "ci_rededge", "psri",
-                           "ndmi", "nmdi", "nbr", "lai", "fapar"):
+                           "ndmi", "nmdi", "nbr", "lai", "fapar",
+                           "ccci", "mtci", "s2rep", "ari", "dswi",
+                           "arvi", "vari", "wdrvi", "bsi", "ndti"):
                     if idx.get(_k) is not None:
                         record[_k] = idx[_k]
                 results.append(record)

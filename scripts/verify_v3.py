@@ -239,8 +239,48 @@ async def test_new_clusters():
     check("Earthdata parser skips fill, takes newest", earthdata._latest_value(sample) == 408.7)
     check("OTCI registered + classified", indices.classify_otci(2.5) == "adequate"
           and any(p["key"] == "otci" for p in indices.PARAMETER_REGISTRY))
-    check("registry now 22 parameters", len(indices.PARAMETER_REGISTRY) == 22,
+
+
+def test_expansion():
+    """v3.1 expansion to 44 parameters: 10 new S2 indices + 12 derived agronomy params."""
+    print("\n== expansion: 44 parameters (new S2 indices + agronomy fusion) ==")
+    from backend import agronomy
+    dn = {"B2": 400, "B3": 700, "B4": 600, "B5": 1400, "B6": 2600,
+          "B7": 3000, "B8": 3400, "B8A": 3500, "B11": 2000, "B12": 1200}
+    idx = indices.compute_s2_indices(dn)
+    new_s2 = ["ccci", "mtci", "s2rep", "ari", "dswi", "arvi", "vari", "wdrvi", "bsi", "ndti"]
+    check("10 new S2 indices all computed", all(idx.get(k) is not None for k in new_s2),
+          str([k for k in new_s2 if idx.get(k) is None]))
+    check("S2REP in red-edge nm range", 680 <= idx["s2rep"] <= 760, f"{idx['s2rep']}")
+    check("DSWI classified (disease/water)", indices.classify_dswi(idx["dswi"]) in
+          ("healthy", "watch", "stress"))
+    check("registry now 44 parameters", len(indices.PARAMETER_REGISTRY) == 44,
           f"{len(indices.PARAMETER_REGISTRY)}")
+
+    pp = agronomy.photoperiod_hours(30.9, 172)
+    check("photoperiod plausible (midsummer 30.9N ~14h)", pp and 13 < pp < 15, f"{pp}")
+    check("ESI water-stress classification", agronomy.classify_esi(agronomy.esi(2, 5)) == "water_stress")
+    check("CWSI bounded 0-1", 0 <= agronomy.cwsi(40, 30, 2) <= 1)
+    check("chill hours accumulate from cold days",
+          agronomy.chill_hours([{"min_temp_c": 2, "max_temp_c": 10}] * 30) > 0)
+    check("frost risk fires below threshold",
+          agronomy.frost_risk([{"min_temp_c": 2}], "tomato").get("level") == "high")
+    check("heat-stress degree days accumulate",
+          agronomy.heat_stress_degree_days([{"max_temp_c": 40, "min_temp_c": 25}] * 5, "wheat") > 0)
+
+    ag = agronomy.compute_agronomy(
+        30.9, 172, "apple", lst_day_c=40, air_temp_c=30, vpd_kpa=2, et_actual_mm=2, et0_mm=5,
+        precip_recent_mm=5, relative_humidity=85, wind_speed_ms=9, soil_temp_c=24,
+        surface_moisture_m3m3=0.15, thermal_anomaly_c=3,
+        historical_weather=[{"min_temp_c": 2, "max_temp_c": 10}] * 30,
+        forecast_daily=[{"min_temp_c": 2}])
+    check("agronomy emits farmer alerts", len(ag.get("interpretation", {})) >= 3,
+          f"{len(ag.get('interpretation', {}))} alerts")
+    n = indices.count_available_parameters(
+        idx, {"lst": {"lst_day_celsius": 40}, "sar": {"moisture_class": "dry"},
+              "smap": {"rootzone_moisture_m3m3": 0.2}},
+        {"et_mm_day": 2, "solar_radiation_mj": 25, "vpd_kpa": 2, "rootzone_wetness": 0.3, "gdd": 1}, ag)
+    check("full request maps 44 parameters", n == 44, f"{n}")
 
 
 def main():
@@ -248,6 +288,7 @@ def main():
     test_prediction()
     test_logistics()
     test_verification()
+    test_expansion()
     try:
         asyncio.run(test_agroclimate_live())
     except Exception as e:

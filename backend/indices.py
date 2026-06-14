@@ -38,6 +38,17 @@ INDEX_VALID_RANGE = {
     "psri": (-1.0, 1.0), "ndmi": (-1.0, 1.0), "nmdi": (-1.0, 1.0),
     "ndwi_water": (-1.0, 1.0), "nbr": (-1.0, 1.0), "lai": (0.0, 8.0), "fapar": (0.0, 1.0),
     "otci": (0.0, 6.0),  # Sentinel-3 OLCI Terrestrial Chlorophyll Index
+    # v3.1 expansion — distinct pigment / stress / soil / robustness signals
+    "ccci": (0.0, 2.0),     # canopy chlorophyll content (nitrogen, biomass-decoupled)
+    "mtci": (0.0, 10.0),    # red-edge chlorophyll
+    "s2rep": (680.0, 760.0),  # red-edge inflection position (nm)
+    "ari": (-2.0, 25.0),    # anthocyanin (reciprocal-reflectance scale ~0-20)
+    "dswi": (0.0, 10.0),    # disease-water stress index
+    "arvi": (-1.0, 1.0),    # atmospherically-resistant greenness (haze-robust)
+    "vari": (-1.5, 1.5),    # visible-band greenness (NIR-independent)
+    "wdrvi": (-1.0, 1.0),   # wide dynamic range (high-biomass sensitivity)
+    "bsi": (-1.0, 1.0),     # bare soil index (germination gaps / residue)
+    "ndti": (-1.0, 1.0),    # tillage / crop-residue index
 }
 
 
@@ -134,6 +145,37 @@ def compute_s2_indices(bands: dict, already_reflectance: bool = False) -> dict:
     # --- Biophysical (indicative empirical proxies, clearly flagged downstream) ---
     out["lai"] = _lai_from_savi(out.get("savi"))
     out["fapar"] = _fapar_from_ndvi(out.get("ndvi"))
+
+    # --- Expansion set: pigment / stress / soil / robustness (distinct signals) ---
+    # Nitrogen decoupled from biomass: red-edge greenness ÷ broadband greenness.
+    out["ccci"] = _safe_div(out.get("ndre"), out.get("ndvi")) if out.get("ndvi") else None
+    # Red-edge chlorophyll (S2-native MTCI) and red-edge inflection position (nm).
+    out["mtci"] = _safe_div((B6 - B5), (B5 - B4)) if None not in (B6, B5, B4) else None
+    if None not in (B4, B5, B6, B7) and (B6 - B5) != 0:
+        out["s2rep"] = 705.0 + 35.0 * (((B7 + B4) / 2.0 - B5) / (B6 - B5))
+    else:
+        out["s2rep"] = None
+    # Anthocyanin (stress/senescence pigment): reciprocal-reflectance form.
+    out["ari"] = ((1.0 / B3) - (1.0 / B5)) if (B3 and B5) else None
+    # Disease-Water Stress Index — drops under fungal/water stress (KVK trigger).
+    out["dswi"] = _safe_div((B8 + B3), (B11 + B4)) if None not in (B8, B3, B11, B4) else None
+    # Haze-robust and NIR-independent greenness (dust/haze-prone India, cloud edges).
+    if None not in (B8, B4, B2):
+        rb = 2 * B4 - B2
+        out["arvi"] = _safe_div((B8 - rb), (B8 + rb))
+    else:
+        out["arvi"] = None
+    out["vari"] = _safe_div((B3 - B4), (B3 + B4 - B2)) if None not in (B3, B4, B2) else None
+    # Wide Dynamic Range VI — sensitive where NDVI saturates (dense late-season canopy).
+    out["wdrvi"] = _safe_div((0.2 * B8 - B4), (0.2 * B8 + B4)) if None not in (B8, B4) else None
+    # Bare Soil Index (germination gaps, post-harvest) and tillage/residue index.
+    if None not in (B11, B4, B8, B2):
+        num = (B11 + B4) - (B8 + B2)
+        den = (B11 + B4) + (B8 + B2)
+        out["bsi"] = _safe_div(num, den)
+    else:
+        out["bsi"] = None
+    out["ndti"] = _safe_div((B11 - B12), (B11 + B12)) if None not in (B11, B12) else None
 
     # Range-gate everything and round.
     return {k: _round(_in_range(k, v)) for k, v in out.items()}
@@ -237,6 +279,54 @@ def classify_otci(v: Optional[float]) -> str:
     return "deficient"
 
 
+def classify_ccci(v: Optional[float]) -> str:
+    """Canopy chlorophyll / nitrogen status, decoupled from biomass (NDRE÷NDVI)."""
+    if v is None:
+        return "unknown"
+    if v >= 0.7:
+        return "high"
+    if v >= 0.5:
+        return "adequate"
+    if v >= 0.35:
+        return "low"
+    return "deficient"
+
+
+def classify_dswi(v: Optional[float]) -> str:
+    """Disease-Water Stress Index. Drops under fungal infection or water stress."""
+    if v is None:
+        return "unknown"
+    if v >= 1.5:
+        return "healthy"
+    if v >= 1.0:
+        return "watch"
+    return "stress"   # possible disease/water stress → field inspection / KVK
+
+
+def classify_bsi(v: Optional[float]) -> str:
+    """Bare Soil Index — high = exposed soil (germination gaps, post-harvest)."""
+    if v is None:
+        return "unknown"
+    if v >= 0.1:
+        return "bare"
+    if v >= -0.05:
+        return "sparse"
+    return "vegetated"
+
+
+def classify_ari(v: Optional[float]) -> str:
+    """Anthocyanin Reflectance Index (reciprocal-reflectance scale ~0-20). Rises with
+    stress/senescence pigments. Generic thresholds are indicative — used as a relative signal,
+    not a farmer-facing claim, since absolute calibration is crop/condition specific."""
+    if v is None:
+        return "unknown"
+    if v >= 12.0:
+        return "stress"
+    if v >= 7.0:
+        return "mild"
+    return "normal"
+
+
 # Plain-language templates. Deliberately jargon-free: the farmer never hears "NDRE".
 # {status} is filled from the classify_* result; downstream translation handles language.
 _FARMER_LINES = {
@@ -270,6 +360,22 @@ _FARMER_LINES = {
         "sparse": "Leaf cover is thin.",
         "very_sparse": "Very little leaf cover yet.",
     },
+    "dswi": {
+        "healthy": "No sign of disease or water stress in the canopy.",
+        "watch": "Early signs of stress — keep an eye on the leaves this week.",
+        "stress": "The canopy shows possible disease or water stress — a field check with your KVK is wise.",
+    },
+    "ccci": {
+        "high": "Nitrogen looks strong across the canopy.",
+        "adequate": "Nitrogen nourishment looks adequate.",
+        "low": "Nitrogen may be a little low — worth checking leaf colour.",
+        "deficient": "Canopy nitrogen looks low — confirm with your KVK before any input.",
+    },
+    "bsi": {
+        "bare": "Large bare patches — germination gaps or thin stand.",
+        "sparse": "Some bare soil showing between plants.",
+        "vegetated": "Good ground cover, little bare soil.",
+    },
 }
 
 
@@ -299,6 +405,26 @@ PARAMETER_REGISTRY = [
      "measures": "Canopy chlorophyll content.", "kind": "index"},
     {"key": "otci", "name": "OLCI chlorophyll (OTCI)", "family": "chlorophyll", "source": "sentinel3",
      "measures": "Chlorophyll from Sentinel-3 (independent satellite, near-daily).", "kind": "index"},
+    {"key": "ccci", "name": "Canopy chlorophyll (CCCI)", "family": "chlorophyll", "source": "s2",
+     "measures": "Nitrogen status decoupled from biomass.", "kind": "index"},
+    {"key": "mtci", "name": "Red-edge chlorophyll (MTCI)", "family": "chlorophyll", "source": "s2",
+     "measures": "Chlorophyll via S2 red-edge bands.", "kind": "index"},
+    {"key": "s2rep", "name": "Red-edge position (S2REP)", "family": "chlorophyll", "source": "s2",
+     "measures": "Red-edge inflection — nitrogen/stress shift.", "kind": "index"},
+    {"key": "ari", "name": "Anthocyanin stress (ARI)", "family": "phenology", "source": "s2",
+     "measures": "Stress / senescence pigment build-up.", "kind": "index"},
+    {"key": "dswi", "name": "Disease-water stress (DSWI)", "family": "water", "source": "s2",
+     "measures": "Fungal disease / water-stress canopy signal.", "kind": "index"},
+    {"key": "arvi", "name": "Haze-robust greenness (ARVI)", "family": "greenness", "source": "s2",
+     "measures": "Vigour corrected for haze/aerosol.", "kind": "index"},
+    {"key": "vari", "name": "Visible greenness (VARI)", "family": "greenness", "source": "s2",
+     "measures": "Greenness without NIR (cloud-edge robust).", "kind": "index"},
+    {"key": "wdrvi", "name": "Wide-range vigour (WDRVI)", "family": "greenness", "source": "s2",
+     "measures": "Biomass where NDVI saturates (late season).", "kind": "index"},
+    {"key": "bsi", "name": "Bare soil (BSI)", "family": "structure", "source": "s2",
+     "measures": "Exposed soil — germination gaps / residue.", "kind": "index"},
+    {"key": "ndti", "name": "Tillage/residue (NDTI)", "family": "structure", "source": "s2",
+     "measures": "Crop residue and tillage state.", "kind": "index"},
     {"key": "psri", "name": "Senescence (PSRI)", "family": "phenology", "source": "s2",
      "measures": "Plant ageing / ripening — harvest timing.", "kind": "index"},
     {"key": "ndmi", "name": "Canopy water (NDMI)", "family": "water", "source": "s2",
@@ -327,6 +453,31 @@ PARAMETER_REGISTRY = [
      "measures": "Atmospheric water-stress demand.", "kind": "climate"},
     {"key": "gdd", "name": "Heat accumulation (GDD)", "family": "climate", "source": "openmeteo",
      "measures": "Thermal time driving crop stage.", "kind": "climate"},
+    # v3.1 derived agronomy parameters (fused / computed)
+    {"key": "esi", "name": "Evaporative stress (ESI)", "family": "water", "source": "computed",
+     "measures": "Actual÷reference ET — drought early warning.", "kind": "agronomy"},
+    {"key": "cwsi", "name": "Crop water stress (CWSI)", "family": "water", "source": "computed",
+     "measures": "Canopy-temperature water stress.", "kind": "agronomy"},
+    {"key": "surface_moisture_m3m3", "name": "Surface soil moisture", "family": "water", "source": "openmeteo",
+     "measures": "Topsoil (0-1cm) water — germination/crusting.", "kind": "agronomy"},
+    {"key": "thermal_anomaly_c", "name": "Field heat anomaly", "family": "thermal", "source": "modis",
+     "measures": "Field temperature vs surrounding area.", "kind": "agronomy"},
+    {"key": "heat_stress_dd", "name": "Heat-stress degree days", "family": "thermal", "source": "computed",
+     "measures": "Accumulated heat above crop damage threshold.", "kind": "agronomy"},
+    {"key": "frost_risk", "name": "Frost risk", "family": "thermal", "source": "computed",
+     "measures": "Frost likelihood over next 3 days.", "kind": "agronomy"},
+    {"key": "relative_humidity", "name": "Humidity (disease pressure)", "family": "climate", "source": "power",
+     "measures": "Moist-air fungal-disease pressure.", "kind": "agronomy"},
+    {"key": "wind_speed_ms", "name": "Wind speed", "family": "climate", "source": "power",
+     "measures": "Spray drift, lodging, ET driver.", "kind": "agronomy"},
+    {"key": "soil_temp_c", "name": "Soil temperature", "family": "climate", "source": "openmeteo",
+     "measures": "Germination and root activity.", "kind": "agronomy"},
+    {"key": "aridity_index", "name": "Aridity (P/PET)", "family": "climate", "source": "computed",
+     "measures": "Recent rainfall vs water demand.", "kind": "agronomy"},
+    {"key": "photoperiod_hours", "name": "Day length", "family": "phenology", "source": "computed",
+     "measures": "Daylight hours — flowering trigger.", "kind": "agronomy"},
+    {"key": "chill_hours", "name": "Chill accumulation", "family": "phenology", "source": "computed",
+     "measures": "Winter chill for temperate fruit.", "kind": "agronomy"},
 ]
 
 REGISTRY_BY_KEY = {p["key"]: p for p in PARAMETER_REGISTRY}
@@ -342,6 +493,7 @@ def build_index_assessment(indices: dict) -> list[dict]:
     classifiers = {
         "ndvi": classify_ndvi, "ndre": classify_ndre, "ndmi": classify_ndmi,
         "psri": classify_psri, "lai": classify_lai,
+        "dswi": classify_dswi, "ccci": classify_ccci, "bsi": classify_bsi,
     }
     for key, classify in classifiers.items():
         val = indices.get(key)
@@ -359,9 +511,17 @@ def build_index_assessment(indices: dict) -> list[dict]:
     return rows
 
 
-def count_available_parameters(indices: dict, satellite_extras: dict, agroclimate: dict) -> int:
-    """How many of the registry parameters actually have a value on this request.
-    Used for transparency ('mapped 17 of 21 growth signals') and confidence."""
+_AGRONOMY_PARAM_KEYS = (
+    "photoperiod_hours", "chill_hours", "heat_stress_dd", "aridity_index", "esi", "cwsi",
+    "relative_humidity", "wind_speed_ms", "soil_temp_c", "surface_moisture_m3m3",
+    "thermal_anomaly_c", "frost_risk",
+)
+
+
+def count_available_parameters(indices: dict, satellite_extras: dict, agroclimate: dict,
+                               agronomy: dict = None) -> int:
+    """How many distinct registry parameters actually have a value on this request.
+    Used for transparency ('mapped 31 of 44 growth signals') and confidence."""
     n = 0
     for key in INDEX_VALID_RANGE:
         if indices.get(key) is not None:
@@ -374,7 +534,11 @@ def count_available_parameters(indices: dict, satellite_extras: dict, agroclimat
     if extras.get("smap", {}).get("rootzone_moisture_m3m3") is not None:
         n += 1
     ac = agroclimate or {}
-    for key in ("et_mm_day", "solar_radiation_mj", "vpd_kpa", "rootzone_wetness"):
+    for key in ("et_mm_day", "solar_radiation_mj", "vpd_kpa", "rootzone_wetness", "gdd"):
         if ac.get(key) is not None:
+            n += 1
+    ag = agronomy or {}
+    for key in _AGRONOMY_PARAM_KEYS:
+        if ag.get(key) is not None:
             n += 1
     return n

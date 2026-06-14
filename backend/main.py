@@ -297,6 +297,7 @@ try:
     from backend import prediction as v3_prediction
     from backend import logistics as v3_logistics
     from backend import verification as v3_verification
+    from backend import agronomy as v3_agronomy
     from backend.agroclimate import fetch_agroclimate
     from backend.copernicus import fetch_copernicus_indices, fetch_sentinel3_indices
     from backend.earthdata import fetch_earthdata
@@ -305,6 +306,7 @@ except ImportError:
     import prediction as v3_prediction
     import logistics as v3_logistics
     import verification as v3_verification
+    import agronomy as v3_agronomy
     from agroclimate import fetch_agroclimate
     from copernicus import fetch_copernicus_indices, fetch_sentinel3_indices
     from earthdata import fetch_earthdata
@@ -1250,6 +1252,7 @@ async def generate_advisory_with_gemini(
     index_assessment: list = None,
     indices_map: dict = None,
     predictions: dict = None,
+    agronomy: dict = None,
 ) -> str:
     """Send pre-computed inferences to Gemini and get a human, conversational advisory."""
     language_name = LANGUAGE_NAMES.get(language, "Hindi")
@@ -1422,6 +1425,8 @@ If farmer reports recent spraying -> note that satellite data may not reflect th
             tag = " (indicative)" if row.get("indicative") else ""
             signal_lines.append(f"  - {row['farmer_line']}{tag}")
     for v in ((agroclimate or {}).get("interpretation") or {}).values():
+        signal_lines.append(f"  - {v}")
+    for v in ((agronomy or {}).get("interpretation") or {}).values():
         signal_lines.append(f"  - {v}")
     if signal_lines:
         growth_signals_section = (
@@ -2583,6 +2588,7 @@ async def _handle_tool_call(
         cross_val = result.get("cross_validation", [])
         agro = result.get("agroclimate", {}) or {}
         preds = result.get("predictions", {}) or {}
+        agronomy_data = result.get("agronomy", {}) or {}
 
         data = {
             "location": f"{location.get('location_name', '?')}, {location.get('state', '?')}",
@@ -2645,6 +2651,8 @@ async def _handle_tool_call(
             },
             "growth_prediction": preds.get("trajectory", {}).get("farmer_line", ""),
             "harvest_prediction": preds.get("harvest", {}).get("farmer_line", ""),
+            "field_alerts": list((agronomy_data.get("interpretation") or {}).values()),
+            "parameters_total": result.get("parameters_mapped", 0),
             "agro_climate": {
                 "daily_water_use_mm": agro.get("et0_mm_day") or agro.get("et_mm_day"),
                 "root_zone_moisture_m3m3": agro.get("soil_moisture_root_m3m3"),
@@ -2878,9 +2886,36 @@ async def _run_advisory(req: AdvisoryRequest):
         indices_map = {k: v for k, v in indices_map.items() if v is not None}
         index_assessment = v3_indices.build_index_assessment(indices_map)
         parameters_count = v3_indices.count_available_parameters(indices_map, satellite_extras, agroclimate)
-        log.info(f"Growth parameters available this request: {parameters_count}")
     except Exception as e:
         log.warning(f"v3 indices assembly failed: {e}")
+
+    # Derived agronomy parameters — water stress (CWSI/ESI), frost, chill, photoperiod,
+    # humidity/disease pressure, wind, heat load, aridity. Fused from data already gathered.
+    agronomy = {}
+    try:
+        _doy = datetime.utcnow().timetuple().tm_yday
+        _lst = satellite_extras.get("lst") or {}
+        agronomy = v3_agronomy.compute_agronomy(
+            req.latitude, _doy, crop,
+            lst_day_c=_lst.get("lst_day_celsius"),
+            air_temp_c=agroclimate.get("air_temp_c"),
+            vpd_kpa=agroclimate.get("vpd_kpa"),
+            et_actual_mm=agroclimate.get("et_mm_day"),
+            et0_mm=agroclimate.get("et0_mm_day"),
+            precip_recent_mm=agroclimate.get("precip_recent_mm"),
+            relative_humidity=agroclimate.get("relative_humidity"),
+            wind_speed_ms=agroclimate.get("wind_speed_ms"),
+            soil_temp_c=agroclimate.get("soil_temp_c"),
+            surface_moisture_m3m3=agroclimate.get("soil_moisture_surface_m3m3"),
+            thermal_anomaly_c=_lst.get("lst_anomaly_celsius"),
+            historical_weather=historical_weather,
+            forecast_daily=weather.get("daily_forecast"),
+        )
+        parameters_count = v3_indices.count_available_parameters(
+            indices_map, satellite_extras, agroclimate, agronomy)
+        log.info(f"Growth parameters mapped this request: {parameters_count}")
+    except Exception as e:
+        log.warning(f"v3 agronomy failed: {e}")
 
     try:
         # Root-zone moisture from the first independent source that answered:
@@ -2945,6 +2980,7 @@ async def _run_advisory(req: AdvisoryRequest):
         index_assessment=index_assessment,
         indices_map=indices_map,
         predictions=predictions,
+        agronomy=agronomy,
     )
 
     response_data = {
@@ -2967,6 +3003,7 @@ async def _run_advisory(req: AdvisoryRequest):
         "index_assessment": index_assessment,
         "parameters_mapped": parameters_count,
         "agroclimate": agroclimate if agroclimate else {},
+        "agronomy": agronomy if agronomy else {},
         "predictions": predictions if predictions else {},
         "advisory": advisory_text,
         "sources": {

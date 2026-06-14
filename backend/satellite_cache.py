@@ -215,7 +215,9 @@ class SatelliteCache:
             # Forward-compat: surface any extended growth indices a newer precompute wrote.
             _extra = {k: raw[k] for k in (
                 "ndre", "savi", "msavi", "gndvi", "ci_rededge", "psri",
-                "ndmi", "nmdi", "nbr", "lai", "fapar") if raw.get(k) is not None}
+                "ndmi", "nmdi", "nbr", "lai", "fapar",
+                "ccci", "mtci", "s2rep", "ari", "dswi",
+                "arvi", "vari", "wdrvi", "bsi", "ndti") if raw.get(k) is not None}
             ndvi_data = {
                 "ndvi": ndvi_val,
                 "evi": _evi,
