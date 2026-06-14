@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend import indices, prediction, logistics, verification, fusion  # noqa: E402
+from backend import indices, prediction, logistics, verification, fusion, quality  # noqa: E402
 from backend.agroclimate import fetch_agroclimate  # noqa: E402
 
 PASS, FAIL = "PASS", "FAIL"
@@ -321,6 +321,37 @@ def test_fusion():
     check("verification flags ignored fused water stress", fw is not None and not fw["passed"])
 
 
+def test_quality():
+    """GPS-accuracy → location confidence, and consolidated data freshness."""
+    print("\n== quality: GPS accuracy + data freshness ==")
+    hi = quality.assess_location_quality(15, 0)
+    check("precise GPS (15m) -> field-reliable", hi["level"] == "high" and hi["reliable_for_field"])
+    ip = quality.assess_location_quality(50000, 0)
+    check("IP fallback (50km) -> area-level, not field-reliable",
+          ip["level"] == "area" and not ip["reliable_for_field"])
+    grid = quality.assess_location_quality(0, 6.0)  # GPS unknown, 6km satellite-grid offset
+    check("6km satellite offset -> approximate", grid["level"] == "approximate",
+          f"{grid['effective_uncertainty_m']}m")
+    worst = quality.assess_location_quality(800, 6.0)  # worse of GPS 800m vs 6km grid
+    check("effective uncertainty = worse of GPS and grid", worst["effective_uncertainty_m"] == 6000,
+          f"{worst['effective_uncertainty_m']}")
+    fr = quality.summarize_freshness(satellite_image_date="2026-06-01", agro_as_of="2026-06-11",
+                                     agro_live=True, mandi_arrival_date="2026-06-13")
+    check("freshness consolidates all layers",
+          all(k in fr["layers"] for k in ("satellite_crop_health", "soil_agroclimate",
+                                          "mandi_prices", "weather")))
+    check("stale satellite -> caveat names the age",
+          fr["satellite_days_old"] is not None and "old" in fr["farmer_caveat"])
+    check("days_since parses ISO date", quality.days_since("2026-06-04") is not None)
+    # Fusion age-tempering: a stale image must not lend HIGH confidence to optical diagnoses.
+    syn = fusion.synthesize({"gdd_stage": "ripening", "psri_status": "senescing",
+                             "trajectory_direction": "declining"}, optical_age_days=12)
+    h = next((f for f in syn["findings"] if f["diagnosis"] == "harvest"), None)
+    check("stale optical tempers harvest confidence + caveat",
+          h is not None and h["confidence"] != "HIGH" and "age_caveat" in h,
+          h and h.get("confidence"))
+
+
 def main():
     test_indices()
     test_prediction()
@@ -328,6 +359,7 @@ def main():
     test_verification()
     test_expansion()
     test_fusion()
+    test_quality()
     try:
         asyncio.run(test_agroclimate_live())
     except Exception as e:

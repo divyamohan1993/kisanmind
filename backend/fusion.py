@@ -218,9 +218,13 @@ def _pretty(bases: list) -> list:
     return [names.get(b, b) for b in bases]
 
 
-def synthesize(signals: dict) -> dict:
+def synthesize(signals: dict, optical_age_days: Optional[int] = None) -> dict:
     """Run all fusions. Returns {findings: [...], picture: 'one-line combined summary'}.
-    Each finding fuses independent sensors into one diagnosis with agreement-based confidence."""
+    Each finding fuses independent sensors into one diagnosis with agreement-based confidence.
+
+    optical_age_days lets stale optical imagery temper optical-derived diagnoses: a green-vs-
+    nitrogen or harvest call built on a 10-day-old image should not claim HIGH confidence. Water
+    is largely spared — it leans on radar/microwave/model/thermal/flux, mostly near-live."""
     findings = []
     water = fuse_water(signals)
     if water:
@@ -237,6 +241,14 @@ def synthesize(signals: dict) -> dict:
     harvest = fuse_harvest(signals)
     if harvest:
         findings.append(harvest)
+
+    # Age-aware tempering: optical-derived diagnoses drop one confidence level on a stale image.
+    if optical_age_days is not None and optical_age_days > 7:
+        _down = {"HIGH": "MEDIUM", "MEDIUM": "LOW"}
+        for f in findings:
+            if f["diagnosis"] in ("nitrogen", "harvest") and f["confidence"] in _down:
+                f["confidence"] = _down[f["confidence"]]
+                f["age_caveat"] = f"from a {optical_age_days}-day-old satellite image"
 
     # One-line combined picture: lead with the highest-confidence actionable finding.
     order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}

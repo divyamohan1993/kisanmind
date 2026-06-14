@@ -114,10 +114,11 @@ export default function TalkPage() {
     const lang = () => languageRef.current;
     const lat = () => geoRef.current.latitude || 0;
     const lon = () => geoRef.current.longitude || 0;
+    const acc = () => geoRef.current.accuracy || 0;
 
     setCallState("processing");
     try {
-      const g = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: "Hello, I need farming advice.", language: lang(), latitude: lat(), longitude: lon() }) });
+      const g = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: "Hello, I need farming advice.", language: lang(), latitude: lat(), longitude: lon(), accuracy_m: acc() }) });
       const gd = await g.json(); sessionIdRef.current = gd.session_id || sessionIdRef.current;
       setCallState("speaking"); addMsg("kisanmind", stripMarkdown(gd.response), "conversation", stripMarkdown(gd.response_en || gd.response));
       const ga = await playTTS(gd.response, lang()); await waitForAudioEnd(ga);
@@ -133,7 +134,7 @@ export default function TalkPage() {
       const advisoryTimer = setTimeout(() => setFetchingAdvisory(true), 5000);
 
       try {
-        const cr = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: transcript, language: lang(), latitude: lat(), longitude: lon() }) });
+        const cr = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionIdRef.current, message: transcript, language: lang(), latitude: lat(), longitude: lon(), accuracy_m: acc() }) });
         const cd = await cr.json();
         clearTimeout(advisoryTimer);
         setFetchingAdvisory(false);

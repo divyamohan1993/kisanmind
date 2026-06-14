@@ -299,6 +299,7 @@ try:
     from backend import verification as v3_verification
     from backend import agronomy as v3_agronomy
     from backend import fusion as v3_fusion
+    from backend import quality as v3_quality
     from backend.agroclimate import fetch_agroclimate
     from backend.copernicus import fetch_copernicus_indices, fetch_sentinel3_indices
     from backend.earthdata import fetch_earthdata
@@ -309,6 +310,7 @@ except ImportError:
     import verification as v3_verification
     import agronomy as v3_agronomy
     import fusion as v3_fusion
+    import quality as v3_quality
     from agroclimate import fetch_agroclimate
     from copernicus import fetch_copernicus_indices, fetch_sentinel3_indices
     from earthdata import fetch_earthdata
@@ -389,6 +391,7 @@ class AdvisoryRequest(BaseModel):
     intent: str = "full_advisory"
     quantity_quintals: float = 0
     sowing_date: str = ""  # ISO format YYYY-MM-DD, empty if unknown
+    accuracy_m: float = 0  # GPS accuracy in metres (0 = unknown); drives location confidence
 
 
 class TTSRequest(BaseModel):
@@ -417,6 +420,7 @@ class ChatRequest(BaseModel):
     language: str = "hi"
     latitude: float = 0
     longitude: float = 0
+    accuracy_m: float = 0  # GPS accuracy in metres (0 = unknown)
 
 
 # ---------------------------------------------------------------------------
@@ -1256,6 +1260,8 @@ async def generate_advisory_with_gemini(
     predictions: dict = None,
     agronomy: dict = None,
     fusion: dict = None,
+    location_quality: dict = None,
+    freshness: dict = None,
 ) -> str:
     """Send pre-computed inferences to Gemini and get a human, conversational advisory."""
     language_name = LANGUAGE_NAMES.get(language, "Hindi")
@@ -1477,6 +1483,18 @@ If farmer reports recent spraying -> note that satellite data may not reflect th
             flines.append(f"  [{f['diagnosis'].upper()}] {f['farmer_line']} ({tag})")
         fusion_section = "\n".join(flines)
 
+    # v3: location-confidence + freshness caveats — disclose only when they matter.
+    quality_section = ""
+    qlines = []
+    if location_quality and location_quality.get("level") in ("approximate", "area"):
+        qlines.append(f"  LOCATION: {location_quality.get('farmer_note', '')} "
+                      "Frame the advice as area-level, NOT exact-field.")
+    if freshness and freshness.get("satellite_days_old") and freshness["satellite_days_old"] > 5:
+        qlines.append(f"  FRESHNESS: {freshness.get('farmer_caveat', '')}")
+    if qlines:
+        quality_section = ("DATA QUALITY CAVEATS (state briefly — especially the location caveat "
+                           "if present):\n" + "\n".join(qlines))
+
     prompt = f"""You are KisanMind — a wise, warm farming neighbor who uses modern data to help. Generate advisory in PLAIN ENGLISH first (it will be translated later).
 
 PERSONALITY RULES:
@@ -1545,6 +1563,8 @@ WEATHER (today's forecast from Open-Meteo):
 {kvk_section}
 
 {_build_cross_validation_section(cross_validation)}
+
+{quality_section}
 
 OUTPUT FORMAT (in this order, keep under 150 words total):
 1. Crop health — LEAD with the COMBINED MULTI-SENSOR DIAGNOSIS if present (say e.g. "several satellites agree..."), cross-referenced with farmer observations (1-2 sentences)
@@ -2552,6 +2572,7 @@ async def _handle_tool_call(
     latitude: float,
     longitude: float,
     language: str,
+    accuracy_m: float = 0,
 ) -> dict:
     """Handle Gemini Live function calls by executing the real data pipeline."""
     if name != "fetch_farm_data":
@@ -2577,6 +2598,7 @@ async def _handle_tool_call(
             intent="full_advisory",
             quantity_quintals=quantity,
             sowing_date=sowing_date,
+            accuracy_m=accuracy_m,
         )
         result = await _run_advisory(req)
 
@@ -2674,6 +2696,11 @@ async def _handle_tool_call(
             "growth_prediction": preds.get("trajectory", {}).get("farmer_line", ""),
             "harvest_prediction": preds.get("harvest", {}).get("farmer_line", ""),
             "field_alerts": list((agronomy_data.get("interpretation") or {}).values()),
+            "location_quality": {
+                "level": result.get("location_quality", {}).get("level"),
+                "note": result.get("location_quality", {}).get("farmer_note", ""),
+            },
+            "data_freshness": result.get("freshness", {}).get("farmer_caveat", ""),
             "combined_diagnosis": {
                 "summary": fusion_data.get("picture", ""),
                 "findings": [
@@ -2719,6 +2746,7 @@ async def _run_advisory(req: AdvisoryRequest):
 
     # 0. Try local satellite cache FIRST (instant, <1ms, no EE call)
     sat_from_cache = False
+    sat_cache_distance_km = None  # satellite-grid offset from the exact point (location quality)
     ndvi_data = None
     ndvi_trajectory = {}
     satellite_extras = {}
@@ -2730,6 +2758,7 @@ async def _run_advisory(req: AdvisoryRequest):
             satellite_extras = cached_sat.get("satellite_extras", {})
             sat_from_cache = True
             cache_dist = cached_sat.get("cache_distance_km", 0)
+            sat_cache_distance_km = cache_dist
             log.info(f"Satellite data from local cache ({cache_dist:.1f}km, computed {cached_sat.get('computed_at', '?')})")
 
             # If cached data is coarse (>5km from exact location), launch background
@@ -3012,7 +3041,8 @@ async def _run_advisory(req: AdvisoryRequest):
             "trajectory_direction": (predictions.get("trajectory") or {}).get("direction"),
             "gdd_stage": (growth_stage or {}).get("stage"),
         }
-        fusion_result = v3_fusion.synthesize(signals)
+        _optical_age = v3_quality.days_since((ndvi_data or {}).get("image_date"))
+        fusion_result = v3_fusion.synthesize(signals, optical_age_days=_optical_age)
         if fusion_result.get("findings"):
             log.info(f"Fusion: {fusion_result['fused_count']} cross-checked diagnoses — "
                      f"{[(f['diagnosis'], f['confidence']) for f in fusion_result['findings']]}")
@@ -3028,6 +3058,28 @@ async def _run_advisory(req: AdvisoryRequest):
                 local_mandi.get("distance_km"), req.quantity_quintals, crop)
     except Exception as e:
         log.warning(f"v3 fare estimate failed: {e}")
+
+    # Location confidence (worse of GPS accuracy and satellite-grid offset) + consolidated
+    # data freshness across every layer. Honest about WHERE and WHEN the advice stands.
+    location_quality = {}
+    freshness = {}
+    try:
+        location_quality = v3_quality.assess_location_quality(req.accuracy_m, sat_cache_distance_km)
+        freshness = v3_quality.summarize_freshness(
+            satellite_image_date=(ndvi_data or {}).get("image_date"),
+            cache_computed_at=_sat_cache.computed_at if _sat_cache.is_loaded else None,
+            agro_as_of=agroclimate.get("power_as_of"),
+            agro_live=bool(agroclimate.get("available")),
+            mandi_arrival_date=best_mandi.get("arrival_date") if best_mandi else None,
+            advisory_age_minutes=0,
+        )
+        if confidence is not None:
+            confidence["location"] = location_quality
+        if location_quality.get("level") in ("approximate", "area"):
+            log.info(f"Location {location_quality['level']} "
+                     f"(~{location_quality['effective_uncertainty_m']}m) — advice hedged to area level")
+    except Exception as e:
+        log.warning(f"v3 quality assessment failed: {e}")
 
     # 7. Generate advisory via Gemini with all pre-computed data
     advisory_text = await generate_advisory_with_gemini(
@@ -3055,6 +3107,8 @@ async def _run_advisory(req: AdvisoryRequest):
         predictions=predictions,
         agronomy=agronomy,
         fusion=fusion_result,
+        location_quality=location_quality,
+        freshness=freshness,
     )
 
     response_data = {
@@ -3079,6 +3133,8 @@ async def _run_advisory(req: AdvisoryRequest):
         "agroclimate": agroclimate if agroclimate else {},
         "agronomy": agronomy if agronomy else {},
         "fusion": fusion_result if fusion_result else {},
+        "location_quality": location_quality if location_quality else {},
+        "freshness": freshness if freshness else {},
         "predictions": predictions if predictions else {},
         "advisory": advisory_text,
         "sources": {
@@ -3262,6 +3318,7 @@ async def websocket_chat(ws: WebSocket):
                 language = msg.get("language", "hi")
                 latitude = msg.get("latitude", 0)
                 longitude = msg.get("longitude", 0)
+                accuracy = msg.get("accuracy", 0)
                 has_gps = latitude != 0 and longitude != 0
 
                 locale = LANGUAGE_TO_LOCALE.get(language, "hi-IN")
@@ -3295,7 +3352,7 @@ async def websocket_chat(ws: WebSocket):
                 async def _on_tool_call(name: str, args: dict) -> dict:
                     if ws.client_state == WebSocketState.CONNECTED:
                         await ws.send_json({"type": "status", "status": "fetching_data"})
-                    result = await _handle_tool_call(name, args, latitude, longitude, language)
+                    result = await _handle_tool_call(name, args, latitude, longitude, language, accuracy)
                     if ws.client_state == WebSocketState.CONNECTED:
                         await ws.send_json({"type": "status", "status": "ready"})
                     return result
@@ -3598,7 +3655,7 @@ async def text_chat(req: ChatRequest):
                     fc = part.function_call
                     tool_result = await _handle_tool_call(
                         fc.name, dict(fc.args),
-                        req.latitude, req.longitude, req.language
+                        req.latitude, req.longitude, req.language, req.accuracy_m
                     )
 
                     session["history"].append({

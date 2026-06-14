@@ -53,6 +53,17 @@ def _recent_sum(series: dict, days: int) -> Optional[float]:
     return round(sum(vals), 2) if vals else None
 
 
+def _latest_date(series: dict) -> Optional[str]:
+    """Date (YYYY-MM-DD) of the most recent non-fill value — exposes NASA POWER's 2-3 day lag."""
+    if not series:
+        return None
+    for d in sorted(series.keys(), reverse=True):
+        v = series[d]
+        if v is not None and v > _POWER_FILL:
+            return f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 else d
+    return None
+
+
 async def _fetch_nasa_power(lat: float, lon: float, client: httpx.AsyncClient) -> dict:
     """Daily agroclimatology from NASA POWER (last ~12 days; POWER has a 2-3 day latency)."""
     end = datetime.utcnow()
@@ -78,6 +89,7 @@ async def _fetch_nasa_power(lat: float, lon: float, client: httpx.AsyncClient) -
         "precip_recent_mm": _recent_sum(p.get("PRECTOTCORR", {}), days=7),
         "relative_humidity": _latest_valid(p.get("RH2M", {})),
         "wind_speed_ms": _latest_valid(p.get("WS2M", {})),
+        "power_as_of": _latest_date(p.get("EVPTRNS", {})) or _latest_date(p.get("T2M", {})),
     }
 
 
