@@ -3298,7 +3298,7 @@ async def websocket_chat(ws: WebSocket):
     """WebSocket endpoint for Gemini Live farmer conversations.
 
     Protocol:
-    - Client sends: {"type": "config", "language": "hi", "latitude": 30.9, "longitude": 77.1}
+    - Client sends: {"type": "config", "language": "hi", "latitude": 30.9, "longitude": 77.1, "accuracy_m": 12}
     - Client sends: {"type": "audio", "data": "<base64 PCM 16kHz mono>"}
     - Server sends: {"type": "audio", "data": "<base64 PCM 24kHz mono>"}
     - Server sends: {"type": "transcript", "speaker": "farmer"|"kisanmind", "text": "..."}
@@ -3318,7 +3318,7 @@ async def websocket_chat(ws: WebSocket):
                 language = msg.get("language", "hi")
                 latitude = msg.get("latitude", 0)
                 longitude = msg.get("longitude", 0)
-                accuracy = msg.get("accuracy", 0)
+                accuracy = msg.get("accuracy_m", msg.get("accuracy", 0))  # accept the standard key
                 has_gps = latitude != 0 and longitude != 0
 
                 locale = LANGUAGE_TO_LOCALE.get(language, "hi-IN")
