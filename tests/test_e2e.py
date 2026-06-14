@@ -70,7 +70,8 @@ def run_tests():
         if r.status_code == 200:
             d = r.json()
             test(f"NDVI {name}: has ndvi value", d.get("ndvi") is not None)
-            test(f"NDVI {name}: has evi value", d.get("evi") is not None)
+            # EVI must be absent or physically valid — never the legacy out-of-range garbage.
+            test(f"NDVI {name}: evi valid or absent", d.get("evi") is None or -1 <= d.get("evi") <= 1)
             test(f"NDVI {name}: has ndwi value", d.get("ndwi") is not None)
             test(f"NDVI {name}: has health class", d.get("health") in ("Healthy", "Moderate", "Stressed", "Bare/Very Stressed", "Unknown"))
             test(f"NDVI {name}: ndvi in valid range", -1 <= (d.get("ndvi") or 0) <= 1)
@@ -122,6 +123,18 @@ def run_tests():
             test(f"Advisory {crop}: has SAR data", "sar" in extras)
             test(f"Advisory {crop}: has LST data", "lst" in extras)
             test(f"Advisory {crop}: has SMAP data", "smap" in extras)
+
+            # v3: multi-parameter sensing, prediction, agro-climate (beyond Earth Engine)
+            test(f"Advisory {crop}: parameters_mapped count", isinstance(d.get("parameters_mapped"), int) and d.get("parameters_mapped", 0) >= 8)
+            test(f"Advisory {crop}: has predictions block", "predictions" in d)
+            test(f"Advisory {crop}: has agroclimate block", "agroclimate" in d)
+            test(f"Advisory {crop}: has index_assessment", "index_assessment" in d)
+            agro = d.get("agroclimate", {})
+            test(f"Advisory {crop}: agro-climate has ET or soil moisture",
+                 (agro.get("et0_mm_day") is not None) or (agro.get("soil_moisture_root_m3m3") is not None) or (agro.get("rootzone_wetness") is not None))
+            preds = d.get("predictions", {})
+            irr = preds.get("irrigation", {}) if isinstance(preds, dict) else {}
+            test(f"Advisory {crop}: irrigation forecast status", (not irr) or irr.get("status") in ("irrigate_now", "irrigate_in_days", "sufficient"))
 
             test(f"Advisory {crop}: response < 60s", elapsed < 60, f"took {elapsed:.1f}s")
         else:

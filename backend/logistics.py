@@ -13,10 +13,20 @@ is transparent so a farmer can see every rupee and adjust.
 from __future__ import annotations
 
 import math
+import os
 from typing import Optional
 
-# Default pump diesel price (Rs/litre), India mid-2026 ballpark. Override per request/env.
-DEFAULT_DIESEL_PRICE = 90.0
+
+def _default_diesel() -> float:
+    """Pump diesel price (Rs/litre). Read from DIESEL_PRICE_PER_L if set, else India 2026 ballpark."""
+    try:
+        v = float(os.getenv("DIESEL_PRICE_PER_L", "") or 0)
+        return v if v > 0 else 90.0
+    except ValueError:
+        return 90.0
+
+
+DEFAULT_DIESEL_PRICE = _default_diesel()
 
 # Vehicle tiers a smallholder/aggregator actually uses. (capacity_q, mileage_kmpl, label)
 VEHICLES = [

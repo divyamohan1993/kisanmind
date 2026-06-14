@@ -4,6 +4,41 @@ All notable changes to KisanMind are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.0.0] - 2026-06-14
+
+### Added
+- **15+ crop-growth parameters** (the 80/20 remote-sensing set) via `backend/indices.py`:
+  NDVI, EVI, SAVI, MSAVI2, NDRE, GNDVI, CIred-edge, PSRI, NDMI, NMDI, NDWI, NBR, LAI, FAPAR,
+  each with jargon-free farmer interpretation and a parameter registry.
+- **Agro-climate layer beyond Earth Engine** (`backend/agroclimate.py`): live, no-key
+  NASA POWER (ET, root/surface soil wetness, solar radiation, precip) + Open-Meteo
+  (layered soil moisture, FAO ET0, VPD, soil temperature). Works for every farmer per request.
+- **Direct Copernicus provider** (`backend/copernicus.py`): Sentinel-2 indices straight from
+  the Copernicus Data Space Ecosystem (Sentinel Hub Statistical API) — no GEE. Credential-gated
+  (`CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET`), graceful when absent.
+- **Prediction layer** (`backend/prediction.py`): FAO-56 soil-water-balance "days until
+  irrigation" forecast (flagship), honest NDVI-trajectory regression (never extrapolates from
+  one observation), short-horizon price guidance, harvest-window estimate.
+- **Real transport economics** (`backend/logistics.py`): diesel + distance + vehicle fare
+  model replacing the flat per-km rate; full breakdown shown to the farmer.
+- **Agentic verification gate** (`backend/verification.py`): deterministic cross-parameter +
+  price-grounding + safety checks on the advisory before delivery; optional LLM auditor that
+  flags and triggers at most one real-pipeline regeneration, never a silent rewrite.
+- New advisory response fields: `indices`, `index_assessment`, `parameters_mapped`,
+  `agroclimate`, `predictions`, and `confidence.verification`.
+- `scripts/verify_v3.py`: offline/no-key verification harness (39 checks incl. live APIs).
+
+### Fixed
+- **EVI scaling bug**: EVI was computed on raw Sentinel-2 DN, producing impossible values
+  (~2.0). Now computed on reflectance in live Earth Engine, the precompute, and the index
+  module; legacy out-of-range cached EVI is null-guarded.
+
+### Changed
+- `precompute_satellite.py` now samples raw Sentinel-2 bands and computes the full 14-index set
+  via the shared module, so a cache rebuild populates all parameters.
+- Advisory and voice (Gemini Live) prompts now lead with the water forecast and weave in the
+  additional growth signals in plain language.
+
 ## [2.1.0] - 2026-03-30
 
 ### Changed
