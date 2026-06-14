@@ -9,7 +9,8 @@
   <img src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white" />
   <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat-square&logo=fastapi&logoColor=white" />
   <img src="https://img.shields.io/badge/Gemini-3_Flash-4285F4?style=flat-square&logo=google&logoColor=white" />
-  <img src="https://img.shields.io/badge/Earth_Engine-4_Satellites-FF6F00?style=flat-square&logo=google-earth&logoColor=white" />
+  <img src="https://img.shields.io/badge/Growth_Params-44-FF6F00?style=flat-square&logo=satellite&logoColor=white" />
+  <img src="https://img.shields.io/badge/Open_Data-8_Sources-009688?style=flat-square" />
   <img src="https://img.shields.io/badge/Languages-22-138808?style=flat-square" />
   <img src="https://img.shields.io/badge/WCAG-2.2_AAA-1a365d?style=flat-square" />
   <img src="https://img.shields.io/github/license/divyamohan1993/kisanmind?style=flat-square" />
@@ -19,7 +20,7 @@
 <h3 align="center">Satellite-to-Voice Agricultural Intelligence for 150M Indian Farmers</h3>
 
 <p align="center">
-  <b>4 Satellites (Sentinel-2, SAR, MODIS, SMAP)</b> &middot; <b>Live Mandi Prices</b> &middot; <b>5-Day Weather</b> &middot; <b>Voice in 22 Languages</b> &middot; <b>Twilio Phone Calls</b>
+  <b>44 Growth Parameters</b> &middot; <b>8 Satellite/Open-Data Sources (beyond Earth Engine)</b> &middot; <b>Predicts Irrigation & Harvest</b> &middot; <b>Agentic Verification</b> &middot; <b>Voice in 22 Languages</b>
 </p>
 
 <p align="center">
@@ -38,7 +39,7 @@ India's **150 million farming households** make daily decisions worth **₹45 la
 - **"Rain expected" is useless** — doesn't say whether to irrigate, harvest, or spray for *their* crop at *their* growth stage
 - **60%+ farmers excluded** — advisory services only in English/Hindi
 
-**KisanMind** solves this with **one phone call** — 4 satellites + 112 crop prices + weather + Google Maps logistics, synthesized by Gemini into voice advice in **22 Indian languages**.
+**KisanMind** solves this with **one phone call** — 20+ crop-growth parameters from 6 open satellite/agro-climate sources (not just Google Earth Engine) + 112 crop prices + real transport economics, turned into a **prediction** (when to water, when to harvest, when to sell) that is **agentically verified** and spoken back in **22 Indian languages**.
 
 ---
 
@@ -53,17 +54,21 @@ KisanMind responds in **their language** with real data:
 
 > *"Aapki fasal ki sehat madhyam hai — Sentinel-2 NDVI score 0.54. Bhindi ka sabse achha bhav APMC Bhuntar mandi mein 7500 rupaye per quintal hai, 251 km door. Transport kaat ke, aapko 6175 rupaye per quintal milega. 29-30 March ko baarish hone ki sambhavna hai — usse pehle paani na dein aur na hi chhidkav karein."*
 
-This required fusing **9 real data sources** in real-time:
+This required fusing **real data from many sources** in real-time:
 
 1. **GPS** — Browser geolocation detected farmer's exact coordinates
-2. **Sentinel-2** — NDVI/EVI/NDWI for crop health (10m resolution, via Earth Engine)
+2. **Sentinel-2** (optical) — 14 growth indices: NDVI, EVI, SAVI/MSAVI, NDRE & GNDVI & CIre (nitrogen/chlorophyll), NDMI/NMDI (canopy water), PSRI (ripening), LAI & FAPAR (canopy)
 3. **Sentinel-1 SAR** — Radar soil moisture through clouds (C-band VV/VH backscatter)
 4. **MODIS Terra** — Land surface temperature for heat stress detection (1km daily)
 5. **NASA SMAP** — Root-zone soil moisture 0–100cm deep (9km, L4 model)
-6. **AgMarkNet** — Government mandi prices from data.gov.in (112 commodities)
-7. **Google Maps** — Real driving distances + transport cost to each mandi
-8. **Open-Meteo** — 5-day forecast + 90-day historical weather for GDD growth stage
-9. **Gemini 3 Flash** — Synthesized everything into conversational advice in farmer's language
+6. **NASA POWER** *(no key, beyond Earth Engine)* — evapotranspiration, root/surface soil wetness, solar radiation
+7. **Open-Meteo** *(no key)* — layered soil moisture, FAO ET0, vapour-pressure deficit, 5-day + 90-day weather
+8. **Copernicus Data Space** *(optional)* — Sentinel-2 indices fetched directly from ESA, no GEE
+9. **AgMarkNet** — Government mandi prices from data.gov.in (112 commodities)
+10. **Google Maps** — Real driving distances + diesel-based transport fare to each mandi
+11. **Prediction engine** — FAO-56 soil-water balance → *days until irrigation*; trajectory, harvest & price forecasts
+12. **Agentic verification** — cross-checks every parameter + grounds every price before the farmer hears it
+13. **Gemini 3 Flash** — Synthesized everything into conversational advice in farmer's language
 
 ---
 
@@ -183,13 +188,49 @@ sequenceDiagram
 - **Gemini-powered call summary** — 3-5 key bullet points generated after call ends
 - Multi-turn conversation with follow-up questions
 
-### Real Satellite Intelligence
-- **Sentinel-2** imagery via Google Earth Engine (NDVI, EVI, NDWI)
-- **Sentinel-1 SAR** — radar-based soil moisture (works through clouds)
-- **MODIS Terra** — land surface temperature (1km daily)
-- **NASA SMAP** — root-zone soil moisture (9km resolution)
-- Crop health classified: **Healthy / Moderate / Stressed** with 30-day trend
-- True-color and NDVI-overlay thumbnail images
+### Real Multi-Parameter Sensing (44 parameters)
+NDVI alone saturates, ignores water and nitrogen, and lies during ripening. KisanMind maps
+**44 parameters** that together explain crop growth, then translates them to plain language:
+- **Greenness / biomass** — NDVI, EVI, SAVI, MSAVI2, ARVI, VARI, WDRVI, LAI, FAPAR
+- **Chlorophyll / nitrogen** — NDRE, GNDVI, CIred-edge, CCCI, MTCI, S2REP, OTCI *(7 ways to catch deficiency a green canopy hides)*
+- **Water / stress** — NDMI, NMDI, DSWI *(disease)*; SAR + SMAP + GLDAS *(soil)*; ET, ESI, CWSI *(crop water stress)*; VPD, surface moisture, aridity
+- **Phenology / damage** — PSRI, ARI, GDD, photoperiod, chill hours, heat-stress degree days, frost risk, NBR
+- **Soil / climate** — BSI *(germination gaps)*, NDTI *(residue)*, LST + field heat anomaly, solar, humidity *(disease)*, wind *(spray)*, soil temperature
+- **8 sources, beyond Earth Engine** — Sentinel-2/-1, MODIS, SMAP (via GEE); **NASA POWER**
+  & **Open-Meteo** (live, no key); **Copernicus Sentinel-2 + Sentinel-3 OLCI** (direct from
+  ESA); **NASA Earthdata GLDAS** (independent soil/ET). If one source is down, the rest carry
+  the advisory; independent sources let the verifier trust agreeing signals.
+- Fixes the legacy EVI scaling bug; every value is range-checked before use.
+- `GET /api/parameters` lists all 44 parameters by family with their source, at runtime.
+
+### These don't stay separate numbers — they're fused
+A synthesis layer combines the 44 parameters by *physically independent* measurement basis, so
+agreement across independent sensors is what raises confidence:
+- When radar, microwave (SMAP), a land-surface model, canopy temperature **and**
+  evapotranspiration all read "dry," that is a **HIGH-confidence** call to irrigate.
+- When they disagree — leaf stress but wet soil — the system **flags the conflict** ("check by
+  hand") instead of guessing.
+- Seven correlated red-edge chlorophyll indices count as **one** basis, so confidence is never
+  inflated by redundant sensors. A green canopy hiding low nitrogen is caught as a **hidden
+  deficiency** NDVI alone would miss.
+
+The advisory **leads with this combined diagnosis**, and the verification gate flags any advisory
+that ignores a high-confidence fused finding.
+
+> **Coverage, honestly:** the agro-climate signals (ET, soil moisture, solar, VPD) and the
+> base satellite layer reach every farmer **live, today**. The full 24-index optical set is
+> computed on the live Earth-Engine path and via Copernicus immediately; for pre-cached
+> locations the 24 Sentinel-2 indices land after a one-time `precompute_satellite.py` rerun.
+> The system reports `parameters_mapped` on every advisory so coverage is never overstated.
+
+### Prediction & Agentic Verification
+- **Days until irrigation** — FAO-56 soil-water balance from real root-zone moisture + ET +
+  rain forecast. The single most actionable number a farmer gets.
+- **Trajectory / harvest / price forecasts** — grounded in real series; never extrapolated
+  from a single satellite pass; every forecast carries a confidence and an "indicative" flag.
+- **Agentic verification gate** — before the farmer hears anything, deterministic checks
+  ground every stated price against source data, flag sensor contradictions, and enforce
+  safety; a failure triggers exactly one real-pipeline regeneration, never a silent rewrite.
 
 ### Smart Mandi Price Arbitrage
 - Live prices from **AgMarkNet** (data.gov.in) — **112 commodities** cached in GCS
@@ -306,6 +347,7 @@ Languages without native TTS are auto-translated to Hindi for speech synthesis.
 | `POST` | `/api/voice/process` | Twilio webhook — speech processing + TwiML response |
 | `WS` | `/ws/chat` | WebSocket for Gemini Live voice streaming |
 | `GET` | `/api/health` | Service health + API availability check |
+| `GET` | `/api/parameters` | All 44 growth parameters by family + source + provider status |
 | `GET` | `/api/beep` | Base64 WAV alert tone for advisory notifications |
 
 ---
@@ -318,6 +360,14 @@ Languages without native TTS are auto-translated to Hindi for speech synthesis.
 | Soil Moisture (Radar) | Sentinel-1 SAR C-band (VV/VH) | 10m | Pre-computed grid (O(1)) | Every 6 days |
 | Land Surface Temperature | MODIS Terra MOD11A1 | 1km | Pre-computed grid (O(1)) | Daily |
 | Root-Zone Moisture (0–100cm) | NASA SMAP L4 | 9km | Pre-computed grid (O(1)) | Every 2-3 days |
+| 24 Sentinel-2 growth indices | Sentinel-2 SR (shared index module) | 10-20m | Grid / live EE | Per cache build |
+| Derived agronomy (CWSI, ESI, photoperiod, chill, frost, aridity) | Fusion of LST + ET + weather + lat/date | Point | Computed | Per request |
+| ET, soil wetness, solar | **NASA POWER** (no key, beyond GEE) | ~0.5° | Live | Per request |
+| Layered soil moisture, ET0, VPD | **Open-Meteo** (no key) | Hyperlocal | Live | Per request |
+| Direct Sentinel-2 indices | **Copernicus Data Space** (optional, no GEE) | 10m | Live | Per request |
+| Irrigation / harvest / price forecast | FAO-56 + trajectory + price model | — | Computed | Per request |
+| Advisory verification | Deterministic grounding + safety gate | — | Computed | Per request |
+| Transport fare | Diesel + distance + vehicle model | Per mandi | Computed | Per request |
 | NDVI Trajectory + Benchmark | Sentinel-2 time series | 10m | Live EE (background) | Per request |
 | Mandi Prices (112 commodities) | AgMarkNet / data.gov.in | Per mandi | GCS bucket (1h TTL) | Daily |
 | 90-Day Price History | AgMarkNet historical | Per commodity | GCS bucket (24h TTL) | Daily |

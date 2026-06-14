@@ -4,6 +4,77 @@ All notable changes to KisanMind are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.1.0] - 2026-06-14
+
+### Added
+- **Doubled to 44 growth parameters** for denser fact mapping and prediction:
+  - 10 new Sentinel-2 indices (`backend/indices.py`): CCCI (nitrogen decoupled from biomass),
+    MTCI + S2REP (red-edge chlorophyll/position), ARI (anthocyanin stress), **DSWI**
+    (disease-water stress → KVK trigger), ARVI + VARI (haze/RGB-robust greenness), WDRVI
+    (late-season biomass), BSI (germination gaps), NDTI (residue/tillage).
+  - 12 derived agronomy parameters (`backend/agronomy.py`, pure): **CWSI** + **ESI** (crop
+    water stress from LST/air-temp/VPD and actual÷reference ET), field thermal anomaly,
+    relative humidity (fungal-disease pressure), wind (spray/lodging), soil temperature,
+    surface soil moisture, aridity index, photoperiod (flowering), chill hours (temperate
+    fruit), heat-stress degree days, frost risk — each with farmer-language interpretation.
+- NASA POWER fetch extended with relative humidity (RH2M) and wind (WS2M).
+- `parameters_mapped` now reports up to 44; `GET /api/parameters` and the cache/precompute
+  storage updated accordingly. Advisory + voice weave the new water-stress, disease, frost
+  and spray-timing signals into plain language.
+- **Multi-sensor fusion** (`backend/fusion.py`): combines the 44 parameters into cross-checked
+  diagnoses (water / nitrogen / disease / heat / harvest) weighted by *physically independent*
+  measurement basis — agreement across independent sensors raises confidence, correlated
+  indices count once, and disagreement is flagged as a conflict rather than guessed. The
+  advisory leads with this combined diagnosis; the verification gate flags advisories that
+  ignore a high-confidence fused finding. Response adds a `fusion` block.
+- **Location accuracy + data freshness** (`backend/quality.py`): GPS accuracy now flows from the
+  client to the backend; location confidence is the worse of GPS accuracy and the satellite-grid
+  offset, and approximate/area-level fixes (e.g. IP fallback ~50 km) get an honest area-level
+  caveat instead of being treated as exact. Consolidated per-layer freshness (NASA POWER's 2-3
+  day lag now exposed via `power_as_of`); fusion drops optical-derived diagnoses one confidence
+  level on a >7-day-old image. Response adds `location_quality` and `freshness` blocks.
+
+## [3.0.0] - 2026-06-14
+
+### Added
+- **15+ crop-growth parameters** (the 80/20 remote-sensing set) via `backend/indices.py`:
+  NDVI, EVI, SAVI, MSAVI2, NDRE, GNDVI, CIred-edge, PSRI, NDMI, NMDI, NDWI, NBR, LAI, FAPAR,
+  each with jargon-free farmer interpretation and a parameter registry.
+- **Agro-climate layer beyond Earth Engine** (`backend/agroclimate.py`): live, no-key
+  NASA POWER (ET, root/surface soil wetness, solar radiation, precip) + Open-Meteo
+  (layered soil moisture, FAO ET0, VPD, soil temperature). Works for every farmer per request.
+- **Direct Copernicus provider** (`backend/copernicus.py`): Sentinel-2 indices straight from
+  the Copernicus Data Space Ecosystem (Sentinel Hub Statistical API) — no GEE. Credential-gated
+  (`CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET`), graceful when absent.
+- **Sentinel-3 OLCI cluster** (`backend/copernicus.py`): OTCI chlorophyll + 300m near-daily
+  NDVI that gap-fills Sentinel-2's cloud cover. Same CDSE credentials, no GEE.
+- **NASA Earthdata cluster** (`backend/earthdata.py`): GLDAS-Noah root-zone moisture, 3-layer
+  soil profile, ET and surface temperature via GES DISC Data Rods — a third independent
+  soil-water source for cross-validation. Token-gated (`EARTHDATA_TOKEN`), graceful when absent.
+- `GET /api/parameters`: lists all 22 parameters by family with sources + provider status.
+- **Prediction layer** (`backend/prediction.py`): FAO-56 soil-water-balance "days until
+  irrigation" forecast (flagship), honest NDVI-trajectory regression (never extrapolates from
+  one observation), short-horizon price guidance, harvest-window estimate.
+- **Real transport economics** (`backend/logistics.py`): diesel + distance + vehicle fare
+  model replacing the flat per-km rate; full breakdown shown to the farmer.
+- **Agentic verification gate** (`backend/verification.py`): deterministic cross-parameter +
+  price-grounding + safety checks on the advisory before delivery; optional LLM auditor that
+  flags and triggers at most one real-pipeline regeneration, never a silent rewrite.
+- New advisory response fields: `indices`, `index_assessment`, `parameters_mapped`,
+  `agroclimate`, `predictions`, and `confidence.verification`.
+- `scripts/verify_v3.py`: offline/no-key verification harness (39 checks incl. live APIs).
+
+### Fixed
+- **EVI scaling bug**: EVI was computed on raw Sentinel-2 DN, producing impossible values
+  (~2.0). Now computed on reflectance in live Earth Engine, the precompute, and the index
+  module; legacy out-of-range cached EVI is null-guarded.
+
+### Changed
+- `precompute_satellite.py` now samples raw Sentinel-2 bands and computes the full 14-index set
+  via the shared module, so a cache rebuild populates all parameters.
+- Advisory and voice (Gemini Live) prompts now lead with the water forecast and weave in the
+  additional growth signals in plain language.
+
 ## [2.1.0] - 2026-03-30
 
 ### Changed

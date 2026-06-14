@@ -148,6 +148,16 @@ async def cache_set(key: str, value: dict):
     # GCS write in background (don't block response)
     asyncio.create_task(_gcs_set(key, value))
 
+
+async def _safe_coro(coro, default):
+    """Await a best-effort coroutine; return `default` on any failure. The v3 enrichment
+    layer uses this so a flaky external source can never break the core advisory."""
+    try:
+        return await coro
+    except Exception as e:
+        log.warning(f"v3 best-effort task failed: {e}")
+        return default
+
 # Gemini clients — API key (primary) + Vertex AI (fallback, no rate limits with billing)
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 _vertex_client = None
@@ -279,6 +289,32 @@ try:
 except ImportError:
     from gemini_live import GeminiLiveSession, KISANMIND_TOOLS
 
+# v3 modules — multi-parameter sensing, agro-climate (beyond-GEE), prediction, logistics,
+# agentic verification. All best-effort: every call site wraps these so a failure degrades
+# to the prior behaviour and never breaks the advisory.
+try:
+    from backend import indices as v3_indices
+    from backend import prediction as v3_prediction
+    from backend import logistics as v3_logistics
+    from backend import verification as v3_verification
+    from backend import agronomy as v3_agronomy
+    from backend import fusion as v3_fusion
+    from backend import quality as v3_quality
+    from backend.agroclimate import fetch_agroclimate
+    from backend.copernicus import fetch_copernicus_indices, fetch_sentinel3_indices
+    from backend.earthdata import fetch_earthdata
+except ImportError:
+    import indices as v3_indices
+    import prediction as v3_prediction
+    import logistics as v3_logistics
+    import verification as v3_verification
+    import agronomy as v3_agronomy
+    import fusion as v3_fusion
+    import quality as v3_quality
+    from agroclimate import fetch_agroclimate
+    from copernicus import fetch_copernicus_indices, fetch_sentinel3_indices
+    from earthdata import fetch_earthdata
+
 # ---------------------------------------------------------------------------
 # Gemini Live sessions (one per active call)
 # ---------------------------------------------------------------------------
@@ -355,6 +391,7 @@ class AdvisoryRequest(BaseModel):
     intent: str = "full_advisory"
     quantity_quintals: float = 0
     sowing_date: str = ""  # ISO format YYYY-MM-DD, empty if unknown
+    accuracy_m: float = 0  # GPS accuracy in metres (0 = unknown); drives location confidence
 
 
 class TTSRequest(BaseModel):
@@ -383,6 +420,7 @@ class ChatRequest(BaseModel):
     language: str = "hi"
     latitude: float = 0
     longitude: float = 0
+    accuracy_m: float = 0  # GPS accuracy in metres (0 = unknown)
 
 
 # ---------------------------------------------------------------------------
@@ -1216,6 +1254,14 @@ async def generate_advisory_with_gemini(
     satellite_extras: dict = None,
     farmer_context: str = "",
     price_history: dict = None,
+    agroclimate: dict = None,
+    index_assessment: list = None,
+    indices_map: dict = None,
+    predictions: dict = None,
+    agronomy: dict = None,
+    fusion: dict = None,
+    location_quality: dict = None,
+    freshness: dict = None,
 ) -> str:
     """Send pre-computed inferences to Gemini and get a human, conversational advisory."""
     language_name = LANGUAGE_NAMES.get(language, "Hindi")
@@ -1380,6 +1426,75 @@ If farmer reports recent spraying -> note that satellite data may not reflect th
         else:
             weather_actions += "\n  Weather is favorable. Normal farming activities can continue."
 
+    # v3: additional crop-growth signals, already interpreted into plain language (no jargon).
+    growth_signals_section = ""
+    signal_lines = []
+    for row in (index_assessment or []):
+        if row.get("farmer_line"):
+            tag = " (indicative)" if row.get("indicative") else ""
+            signal_lines.append(f"  - {row['farmer_line']}{tag}")
+    for v in ((agroclimate or {}).get("interpretation") or {}).values():
+        signal_lines.append(f"  - {v}")
+    for v in ((agronomy or {}).get("interpretation") or {}).values():
+        signal_lines.append(f"  - {v}")
+    if signal_lines:
+        growth_signals_section = (
+            "ADDITIONAL CROP SIGNALS (already interpreted — weave in only the relevant ones, "
+            "do NOT recite all, NEVER name the index):\n" + "\n".join(signal_lines))
+
+    # v3: forward-looking predictions. The soil-water balance is the most actionable — lead with it.
+    prediction_section = ""
+    pred_lines = []
+    irr = (predictions or {}).get("irrigation")
+    if irr and irr.get("farmer_line"):
+        pred_lines.append(f"  WATER FORECAST (soil-water balance, {irr.get('confidence','')}): {irr['farmer_line']}")
+    traj = (predictions or {}).get("trajectory")
+    if traj and traj.get("farmer_line") and traj.get("confidence") != "LOW":
+        pred_lines.append(f"  GROWTH TREND: {traj['farmer_line']}")
+    harv = (predictions or {}).get("harvest")
+    if harv and harv.get("farmer_line"):
+        pred_lines.append(f"  HARVEST WINDOW: {harv['farmer_line']}")
+    pr = (predictions or {}).get("price")
+    if pr and pr.get("farmer_line"):
+        pred_lines.append(f"  PRICE TIMING: {pr['farmer_line']}")
+    if pred_lines:
+        prediction_section = (
+            "PREDICTIONS (forward-looking, most actionable — prioritise the WATER FORECAST; "
+            "all are indicative, never guarantee):\n" + "\n".join(pred_lines))
+
+    # v3: real diesel-based transport fare for the recommended mandi.
+    fare_section = ""
+    _fb = best_mandi.get("fare_breakdown") if best_mandi else None
+    if _fb and _fb.get("farmer_line"):
+        fare_section = f"TRANSPORT FARE (real diesel + distance estimate): {_fb['farmer_line']}"
+
+    # v3.1: fused multi-sensor diagnosis — the COMBINED picture. Lead the advisory with this;
+    # it already weighs independent sensors against each other (agreement = confidence).
+    fusion_section = ""
+    if fusion and fusion.get("findings"):
+        flines = ["COMBINED MULTI-SENSOR DIAGNOSIS (already cross-checked across independent "
+                  "satellites/sensors — LEAD with these; more agreeing sensors = more certain):"]
+        for f in fusion["findings"]:
+            if f.get("conflict"):
+                tag = "sensors DISAGREE — hedge, suggest a hand check"
+            else:
+                tag = (f"{f['confidence']} confidence — {f['independent_bases_agreeing']} of "
+                       f"{f['independent_bases_checked']} independent sensors agree")
+            flines.append(f"  [{f['diagnosis'].upper()}] {f['farmer_line']} ({tag})")
+        fusion_section = "\n".join(flines)
+
+    # v3: location-confidence + freshness caveats — disclose only when they matter.
+    quality_section = ""
+    qlines = []
+    if location_quality and location_quality.get("level") in ("approximate", "area"):
+        qlines.append(f"  LOCATION: {location_quality.get('farmer_note', '')} "
+                      "Frame the advice as area-level, NOT exact-field.")
+    if freshness and freshness.get("satellite_days_old") and freshness["satellite_days_old"] > 5:
+        qlines.append(f"  FRESHNESS: {freshness.get('farmer_caveat', '')}")
+    if qlines:
+        quality_section = ("DATA QUALITY CAVEATS (state briefly — especially the location caveat "
+                           "if present):\n" + "\n".join(qlines))
+
     prompt = f"""You are KisanMind — a wise, warm farming neighbor who uses modern data to help. Generate advisory in PLAIN ENGLISH first (it will be translated later).
 
 PERSONALITY RULES:
@@ -1389,7 +1504,7 @@ PERSONALITY RULES:
 - Convert satellite health to: "fasal ki sehat achhi/theek/kamzor hai"
 - ALWAYS state data age: "4 din purani satellite image se", "aaj ke rate", "aaj ka mausam"
 - If satellite data is old (>5 days), explicitly say recent farm actions won't be reflected.
-- Keep under 120 words. Farmer is in a field, not reading a report.
+- Keep under 150 words. Farmer is in a field, not reading a report.
 
 CONFIDENCE LEVELS FOR EACH DATA SOURCE:
 - Satellite crop health: {confidence.get('satellite', {}).get('level', 'UNAVAILABLE')} confidence ({confidence.get('satellite', {}).get('days_old', '?')} days old)
@@ -1426,14 +1541,22 @@ Extra earning at best mandi: Rs {price_advantage}/quintal more
 {top_mandis_section}
 {quantity_section}
 
+{fusion_section}
+
 {satellite_section}
 {stage_section}
 
 {extra_sat_section}
 
+{growth_signals_section}
+
 WEATHER (today's forecast from Open-Meteo):
 {weather['summary']}
 {weather_actions}
+
+{prediction_section}
+
+{fare_section}
 
 {farmer_problems_section}
 
@@ -1441,13 +1564,16 @@ WEATHER (today's forecast from Open-Meteo):
 
 {_build_cross_validation_section(cross_validation)}
 
-OUTPUT FORMAT (in this order):
-1. Crop health — satellite data cross-referenced with farmer observations (1-2 sentences)
-2. Farmer's problem response — directly address what they reported, if any (1-3 sentences, skip if no problems)
-3. Weather action (1-2 sentences, specific DO or DON'T with date)
-4. Best mandi recommendation (price, distance, net profit)
-5. Sell timing advice (based on price trend, hedge if low confidence)
-6. KVK info + disclaimer
+{quality_section}
+
+OUTPUT FORMAT (in this order, keep under 150 words total):
+1. Crop health — LEAD with the COMBINED MULTI-SENSOR DIAGNOSIS if present (say e.g. "several satellites agree..."), cross-referenced with farmer observations (1-2 sentences)
+2. Water forecast — if a WATER FORECAST is given, state plainly when to irrigate (1 sentence). This is high priority.
+3. Farmer's problem response — directly address what they reported, if any (1-2 sentences, skip if none)
+4. Weather action (1 sentence, specific DO or DON'T with date)
+5. Best mandi recommendation (price, distance, net profit after real transport fare)
+6. Sell timing advice (based on price trend/prediction, hedge if low confidence)
+7. KVK info + disclaimer
 
 End with: "Yeh aaj ki data ke hisaab se hai. Final faisla aapka hai."
 """
@@ -1469,6 +1595,56 @@ End with: "Yeh aaj ki data ke hisaab se hai. Final faisla aapka hai."
     text = re.sub(r'`(.+?)`', r'\1', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = text.strip()
+
+    # v3 agentic verification gate — deterministic cross-parameter + price-grounding + safety
+    # checks on the ENGLISH draft (before translation, where numbers are easy to verify). On a
+    # HIGH failure it regenerates ONCE through the real prompt. Time-boxed; any error keeps the
+    # draft. Never silently substitutes model free-text for the advice.
+    try:
+        def _status(fn, key):
+            v = (indices_map or {}).get(key)
+            return fn(v) if v is not None else None
+        verify_payload = {
+            "best_mandi": best_mandi, "local_mandi": local_mandi, "mandis": mandis,
+            "price_advantage": price_advantage, "quantity_quintals": quantity_quintals,
+            "indices": indices_map or {}, "satellite_extras": satellite_extras or {},
+            "agroclimate": agroclimate or {}, "growth_stage": growth_stage or {},
+            "cross_validation": cross_validation or [],
+            "irrigation_forecast": (predictions or {}).get("irrigation", {}),
+            "fusion": fusion or {},
+            "ndvi_status": _status(v3_indices.classify_ndvi, "ndvi"),
+            "ndre_status": _status(v3_indices.classify_ndre, "ndre"),
+            "ndmi_status": _status(v3_indices.classify_ndmi, "ndmi"),
+            "psri_status": _status(v3_indices.classify_psri, "psri"),
+        }
+
+        async def _regenerate(issues):
+            fix_note = ("\n\nCORRECT THESE ISSUES (regenerate; every price MUST match the DATA "
+                        "above, no invented numbers):\n" + "\n".join(f"- {i}" for i in issues))
+            _loop = asyncio.get_running_loop()
+            r = await _loop.run_in_executor(None, lambda: _gemini_generate(prompt + fix_note))
+            t = r.text or ""
+            for pat, rep in ((r'\*\*(.+?)\*\*', r'\1'), (r'\*(.+?)\*', r'\1'), (r'#{1,6}\s*', ''),
+                             (r'[-•]\s+', ''), (r'\d+\.\s+', ''), (r'`(.+?)`', r'\1')):
+                t = re.sub(pat, rep, t)
+            return t.strip()
+
+        gate = await asyncio.wait_for(
+            v3_verification.verify_advisory(text, verify_payload, gemini_call=None,
+                                            regenerate=_regenerate),
+            timeout=12.0)
+        if gate.get("regenerated") and gate.get("final_text"):
+            text = gate["final_text"]
+            log.info("Advisory regenerated after verification grounding failure")
+        log.info(f"Verification verdict: {gate.get('verdict')}")
+        if confidence is not None:
+            confidence["verification"] = {
+                "verdict": gate.get("verdict"), "regenerated": gate.get("regenerated"),
+                "checks": [{"check": c["check"], "passed": c["passed"], "severity": c["severity"]}
+                           for c in gate.get("checks", [])],
+            }
+    except Exception as e:
+        log.warning(f"Verification gate skipped: {e}")
 
     # Advisory is generated in English. Translate to farmer's chosen language.
     if language != "en":
@@ -1650,18 +1826,22 @@ def _compute_ndvi_sync(lat: float, lon: float) -> dict:
 
     # Compute indices (Sentinel-2 bands: B4=Red, B8=NIR, B3=Green, B11=SWIR)
     ndvi = latest.normalizedDifference(["B8", "B4"]).rename("NDVI")
+    # EVI MUST use reflectance (0-1), not raw DN — S2_SR_HARMONIZED is scaled by 1e-4. Feeding
+    # raw DN makes the additive "+1" negligible and yields impossible EVI (~2). Scale first.
     evi = latest.expression(
         "2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))",
         {
-            "NIR": latest.select("B8"),
-            "RED": latest.select("B4"),
-            "BLUE": latest.select("B2"),
+            "NIR": latest.select("B8").divide(10000),
+            "RED": latest.select("B4").divide(10000),
+            "BLUE": latest.select("B2").divide(10000),
         },
     ).rename("EVI")
     ndwi = latest.normalizedDifference(["B3", "B8"]).rename("NDWI")
 
-    # Compute mean over the buffer area
-    stats = ndvi.addBands(evi).addBands(ndwi).reduceRegion(
+    # Compute mean over the buffer area. Also pull raw band means so the full v3 index set
+    # (NDRE/SAVI/PSRI/NDMI/...) can be derived for cache-miss live requests.
+    _raw_bands = ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
+    stats = ndvi.addBands(evi).addBands(ndwi).addBands(latest.select(_raw_bands)).reduceRegion(
         reducer=ee.Reducer.mean(),
         geometry=buffer,
         scale=10,
@@ -1671,6 +1851,8 @@ def _compute_ndvi_sync(lat: float, lon: float) -> dict:
     ndvi_val = stats.get("NDVI")
     evi_val = stats.get("EVI")
     ndwi_val = stats.get("NDWI")
+    # Band means as reflectance (0-1) for downstream index computation.
+    bands_refl = {b: (stats[b] * 1e-4) for b in _raw_bands if stats.get(b) is not None}
 
     # Get image date
     image_date_ms = latest.get("system:time_start").getInfo()
@@ -1736,6 +1918,7 @@ def _compute_ndvi_sync(lat: float, lon: float) -> dict:
         "images_found": count,
         "true_color_url": true_color_url,
         "ndvi_color_url": ndvi_color_url,
+        "bands": bands_refl,
         "source": f"Sentinel-2 via Google Earth Engine (project: {EE_PROJECT})",
     }
 
@@ -2234,6 +2417,34 @@ async def health():
     }
 
 
+@app.get("/api/parameters")
+async def list_parameters():
+    """Every crop-growth parameter KisanMind maps, grouped by family, with its data source and
+    which providers are configured. Answers 'what parameters like NDVI are you using?' live."""
+    registry = v3_indices.PARAMETER_REGISTRY
+    by_family: dict[str, list] = {}
+    for p in registry:
+        by_family.setdefault(p["family"], []).append(
+            {"key": p["key"], "name": p["name"], "measures": p["measures"], "source": p["source"]})
+    providers = {
+        "earth_engine_sentinel2_sentinel1_modis_smap": "active" if EE_INITIALIZED else "unavailable",
+        "satellite_cache": _sat_cache.is_loaded,
+        "nasa_power": "live (no key)",
+        "open_meteo": "live (no key)",
+        "copernicus_dataspace_sentinel2_sentinel3": "configured"
+            if (os.getenv("CDSE_CLIENT_ID") and os.getenv("CDSE_CLIENT_SECRET")) else "set CDSE_CLIENT_ID/SECRET",
+        "nasa_earthdata_gldas": "configured" if os.getenv("EARTHDATA_TOKEN") else "set EARTHDATA_TOKEN",
+    }
+    return {
+        "total_parameters": len(registry),
+        "families": by_family,
+        "providers": providers,
+        "note": ("Agro-climate parameters (ET, soil moisture, solar, VPD) and base satellite "
+                 "signals are live with no key. The full optical index set needs live Earth "
+                 "Engine, Copernicus credentials, or a precompute rerun."),
+    }
+
+
 @app.post("/api/ndvi")
 async def get_ndvi(req: NDVIRequest):
     """Get satellite vegetation indices — local cache first, Earth Engine fallback."""
@@ -2361,6 +2572,7 @@ async def _handle_tool_call(
     latitude: float,
     longitude: float,
     language: str,
+    accuracy_m: float = 0,
 ) -> dict:
     """Handle Gemini Live function calls by executing the real data pipeline."""
     if name != "fetch_farm_data":
@@ -2386,6 +2598,7 @@ async def _handle_tool_call(
             intent="full_advisory",
             quantity_quintals=quantity,
             sowing_date=sowing_date,
+            accuracy_m=accuracy_m,
         )
         result = await _run_advisory(req)
 
@@ -2416,6 +2629,10 @@ async def _handle_tool_call(
         trend = result.get("price_trend", {})
         extras = result.get("satellite_extras", {})
         cross_val = result.get("cross_validation", [])
+        agro = result.get("agroclimate", {}) or {}
+        preds = result.get("predictions", {}) or {}
+        agronomy_data = result.get("agronomy", {}) or {}
+        fusion_data = result.get("fusion", {}) or {}
 
         data = {
             "location": f"{location.get('location_name', '?')}, {location.get('state', '?')}",
@@ -2469,11 +2686,43 @@ async def _handle_tool_call(
                 "phone": kvk.get("phone", "1800-180-1551") if kvk else "1800-180-1551",
             },
             "cross_validation_warnings": [cv.get("finding", "") for cv in cross_val] if cross_val else [],
+            "parameters_mapped": result.get("parameters_mapped", 0),
+            "water_forecast": {
+                "status": preds.get("irrigation", {}).get("status"),
+                "days_until_irrigation": preds.get("irrigation", {}).get("days_until_irrigation"),
+                "advice": preds.get("irrigation", {}).get("farmer_line", ""),
+                "source": "FAO-56 soil-water balance (root-zone moisture + ET + rain forecast)",
+            },
+            "growth_prediction": preds.get("trajectory", {}).get("farmer_line", ""),
+            "harvest_prediction": preds.get("harvest", {}).get("farmer_line", ""),
+            "field_alerts": list((agronomy_data.get("interpretation") or {}).values()),
+            "location_quality": {
+                "level": result.get("location_quality", {}).get("level"),
+                "note": result.get("location_quality", {}).get("farmer_note", ""),
+            },
+            "data_freshness": result.get("freshness", {}).get("farmer_caveat", ""),
+            "combined_diagnosis": {
+                "summary": fusion_data.get("picture", ""),
+                "findings": [
+                    {"issue": f.get("diagnosis"), "verdict": f.get("verdict"),
+                     "confidence": f.get("confidence"), "say": f.get("farmer_line")}
+                    for f in fusion_data.get("findings", [])
+                ],
+            },
+            "parameters_total": result.get("parameters_mapped", 0),
+            "agro_climate": {
+                "daily_water_use_mm": agro.get("et0_mm_day") or agro.get("et_mm_day"),
+                "root_zone_moisture_m3m3": agro.get("soil_moisture_root_m3m3"),
+                "air_dryness_vpd_kpa": agro.get("vpd_kpa"),
+                "source": "NASA POWER + Open-Meteo (no Earth Engine)",
+            },
             "instructions": (
                 "Deliver a PERSONALIZED advisory. CITE actual satellite values in your reasoning: "
                 "mention NDVI score, soil moisture class, satellite name, image age. "
                 "The farmer needs to TRUST the data — show them the numbers. "
-                "Mention specific weather dates. Give mandi with price and net profit. "
+                "If a water_forecast is present, state plainly WHEN to irrigate (most actionable) — "
+                "but never read out the index name. Mention specific weather dates. "
+                "Give mandi with price and net profit. "
                 "If they reported pests/disease, refer to the nearest KVK. "
                 "Keep it under 150 words. End with 'This is based on today's data. The final decision is yours.' "
                 "Then ask if they have any other questions."
@@ -2497,6 +2746,7 @@ async def _run_advisory(req: AdvisoryRequest):
 
     # 0. Try local satellite cache FIRST (instant, <1ms, no EE call)
     sat_from_cache = False
+    sat_cache_distance_km = None  # satellite-grid offset from the exact point (location quality)
     ndvi_data = None
     ndvi_trajectory = {}
     satellite_extras = {}
@@ -2508,6 +2758,7 @@ async def _run_advisory(req: AdvisoryRequest):
             satellite_extras = cached_sat.get("satellite_extras", {})
             sat_from_cache = True
             cache_dist = cached_sat.get("cache_distance_km", 0)
+            sat_cache_distance_km = cache_dist
             log.info(f"Satellite data from local cache ({cache_dist:.1f}km, computed {cached_sat.get('computed_at', '?')})")
 
             # If cached data is coarse (>5km from exact location), launch background
@@ -2521,6 +2772,12 @@ async def _run_advisory(req: AdvisoryRequest):
     weather_task = asyncio.create_task(fetch_weather(req.latitude, req.longitude))
     kvk_task = asyncio.create_task(find_nearest_kvk(req.latitude, req.longitude))
     hist_weather_task = asyncio.create_task(fetch_historical_weather(req.latitude, req.longitude, days_back=90))
+    # v3: live agro-climate (NASA POWER + Open-Meteo, no-key, beyond Earth Engine) and an
+    # optional direct-Copernicus index fetch. Both best-effort, both run in parallel.
+    agroclimate_task = asyncio.create_task(_safe_coro(fetch_agroclimate(req.latitude, req.longitude), {}))
+    copernicus_task = asyncio.create_task(_safe_coro(fetch_copernicus_indices(req.latitude, req.longitude), {"available": False}))
+    sentinel3_task = asyncio.create_task(_safe_coro(fetch_sentinel3_indices(req.latitude, req.longitude), {"available": False}))
+    earthdata_task = asyncio.create_task(_safe_coro(fetch_earthdata(req.latitude, req.longitude), {"available": False}))
 
     # Live EE calls only if cache missed
     ndvi_task = None
@@ -2636,6 +2893,194 @@ async def _run_advisory(req: AdvisoryRequest):
         local_mandi = None
         log.warning(f"No mandi data available for {crop} — advisory will skip mandi section")
 
+    # -----------------------------------------------------------------------
+    # 6b. v3 enrichment — 15+ growth parameters, agro-climate, prediction, fare.
+    # Each step is best-effort; any failure leaves the v2 advisory fully intact.
+    # -----------------------------------------------------------------------
+    agroclimate = {}
+    indices_map: dict = {}
+    index_assessment: list = []
+    predictions: dict = {}
+    parameters_count = 0
+    copernicus = {"available": False}
+    sentinel3 = {"available": False}
+    earthdata = {"available": False}
+    # Bounded await — all started in parallel at the top of the request, so they are almost
+    # always already done by here; a single ceiling over the group caps the pathological worst
+    # case (instead of stacking timeouts) and guarantees a hung source never stalls.
+    try:
+        agroclimate, copernicus, sentinel3, earthdata = await asyncio.wait_for(
+            asyncio.gather(agroclimate_task, copernicus_task, sentinel3_task, earthdata_task),
+            timeout=20.0)
+    except Exception as e:
+        log.warning(f"v3 external satellite/agro sources timed out/failed: {e}")
+        agroclimate, copernicus, sentinel3, earthdata = {}, {"available": False}, {"available": False}, {"available": False}
+    log.info(f"Agro-climate: {len(agroclimate.get('sources', []))} sources, Copernicus-S2: "
+             f"{copernicus.get('available')}, Sentinel-3: {sentinel3.get('available')}, "
+             f"Earthdata-GLDAS: {earthdata.get('available')}")
+
+    try:
+        # Optical parameter map from whatever sources answered (cache, live-EE, Copernicus).
+        if ndvi_data:
+            _evi = ndvi_data.get("evi")
+            indices_map["ndvi"] = ndvi_data.get("ndvi")
+            indices_map["evi"] = _evi if (isinstance(_evi, (int, float)) and -1 <= _evi <= 1) else None
+            indices_map["ndwi_water"] = ndvi_data.get("ndwi")
+            # Extended indices written by a newer precompute (cache path).
+            indices_map.update(ndvi_data.get("extra_indices") or {})
+            # Full set derived live from raw bands (cache-miss / live-EE path).
+            if ndvi_data.get("bands"):
+                full = v3_indices.compute_s2_indices(ndvi_data["bands"], already_reflectance=True)
+                indices_map.update({k: v for k, v in full.items() if v is not None})
+        if copernicus.get("available"):
+            for k in ("ndvi", "ndre", "ndmi", "evi", "savi", "psri"):
+                if copernicus.get(k) is not None and indices_map.get(k) is None:
+                    indices_map[k] = copernicus[k]
+        # Sentinel-3 OLCI — independent chlorophyll (OTCI) + same-day NDVI cloud gap-fill.
+        if sentinel3.get("available"):
+            if sentinel3.get("otci") is not None:
+                indices_map["otci"] = sentinel3["otci"]
+            if indices_map.get("ndvi") is None and sentinel3.get("s3_ndvi") is not None:
+                indices_map["ndvi"] = sentinel3["s3_ndvi"]
+        indices_map = {k: v for k, v in indices_map.items() if v is not None}
+        index_assessment = v3_indices.build_index_assessment(indices_map)
+        parameters_count = v3_indices.count_available_parameters(indices_map, satellite_extras, agroclimate)
+    except Exception as e:
+        log.warning(f"v3 indices assembly failed: {e}")
+
+    # Derived agronomy parameters — water stress (CWSI/ESI), frost, chill, photoperiod,
+    # humidity/disease pressure, wind, heat load, aridity. Fused from data already gathered.
+    agronomy = {}
+    try:
+        _doy = datetime.utcnow().timetuple().tm_yday
+        _lst = satellite_extras.get("lst") or {}
+        agronomy = v3_agronomy.compute_agronomy(
+            req.latitude, _doy, crop,
+            lst_day_c=_lst.get("lst_day_celsius"),
+            air_temp_c=agroclimate.get("air_temp_c"),
+            vpd_kpa=agroclimate.get("vpd_kpa"),
+            et_actual_mm=agroclimate.get("et_mm_day"),
+            et0_mm=agroclimate.get("et0_mm_day"),
+            precip_recent_mm=agroclimate.get("precip_recent_mm"),
+            relative_humidity=agroclimate.get("relative_humidity"),
+            wind_speed_ms=agroclimate.get("wind_speed_ms"),
+            soil_temp_c=agroclimate.get("soil_temp_c"),
+            surface_moisture_m3m3=agroclimate.get("soil_moisture_surface_m3m3"),
+            thermal_anomaly_c=_lst.get("lst_anomaly_celsius"),
+            historical_weather=historical_weather,
+            forecast_daily=weather.get("daily_forecast"),
+        )
+        parameters_count = v3_indices.count_available_parameters(
+            indices_map, satellite_extras, agroclimate, agronomy)
+        log.info(f"Growth parameters mapped this request: {parameters_count}")
+    except Exception as e:
+        log.warning(f"v3 agronomy failed: {e}")
+
+    try:
+        # Root-zone moisture from the first independent source that answered:
+        # SMAP (satellite) → Open-Meteo (agroclimate) → NASA Earthdata GLDAS (model).
+        smap_root = (satellite_extras.get("smap") or {}).get("rootzone_moisture_m3m3")
+        root_moist = smap_root
+        if root_moist is None:
+            root_moist = agroclimate.get("soil_moisture_root_m3m3")
+        if root_moist is None:
+            root_moist = earthdata.get("rootzone_moisture_m3m3")
+        fc = agroclimate.get("forecast", {}) or {}
+        rain_fc = [(d.get("precipitation_mm") or 0) for d in weather.get("daily_forecast", [])] \
+            or fc.get("rain_forecast_mm")
+        predictions["irrigation"] = v3_prediction.predict_irrigation_need(
+            crop, root_moist, fc.get("et0_forecast_mm"), rain_fc,
+            et_today_mm=agroclimate.get("et0_mm_day"))
+        predictions["trajectory"] = v3_prediction.predict_vegetation_trajectory(
+            (ndvi_trajectory or {}).get("ndvi_series"))
+        predictions["price"] = v3_prediction.predict_price(
+            price_history, current_modal=best_mandi.get("modal_price"))
+        _psri_status = (v3_indices.classify_psri(indices_map["psri"])
+                        if indices_map.get("psri") is not None else None)
+        predictions["harvest"] = v3_prediction.predict_harvest_window(
+            growth_stage, _psri_status, predictions.get("trajectory"))
+        predictions = {k: v for k, v in predictions.items() if v}
+        if predictions.get("irrigation"):
+            log.info(f"Irrigation forecast: {predictions['irrigation'].get('status')}")
+    except Exception as e:
+        log.warning(f"v3 predictions failed: {e}")
+
+    # -------- Multi-sensor fusion: combine the 44 params into cross-checked diagnoses where
+    # agreement across PHYSICALLY INDEPENDENT sensors raises confidence. The combined picture
+    # (not the raw numbers) is what drives the advisory and the verification gate.
+    fusion_result = {}
+    try:
+        def _st(fn, key):
+            v = indices_map.get(key)
+            return fn(v) if v is not None else None
+        signals = {
+            "ndvi_status": _st(v3_indices.classify_ndvi, "ndvi"),
+            "ndre_status": _st(v3_indices.classify_ndre, "ndre"),
+            "ndmi_status": _st(v3_indices.classify_ndmi, "ndmi"),
+            "ccci_status": _st(v3_indices.classify_ccci, "ccci"),
+            "dswi_status": _st(v3_indices.classify_dswi, "dswi"),
+            "psri_status": _st(v3_indices.classify_psri, "psri"),
+            "ari_status": _st(v3_indices.classify_ari, "ari"),
+            "otci_status": _st(v3_indices.classify_otci, "otci"),
+            "gndvi": indices_map.get("gndvi"),
+            "mtci": indices_map.get("mtci"),
+            "esi_status": (v3_agronomy.classify_esi(agronomy["esi"])
+                           if agronomy.get("esi") is not None else None),
+            "cwsi_status": (v3_agronomy.classify_cwsi(agronomy["cwsi"])
+                            if agronomy.get("cwsi") is not None else None),
+            "sar_moisture": (satellite_extras.get("sar") or {}).get("moisture_class"),
+            "smap_rootzone_class": (satellite_extras.get("smap") or {}).get("rootzone_class"),
+            "power_gwetroot": agroclimate.get("rootzone_wetness"),
+            "model_root_m3m3": (agroclimate.get("soil_moisture_root_m3m3")
+                                or earthdata.get("rootzone_moisture_m3m3")),
+            "lst_heat_stress": (satellite_extras.get("lst") or {}).get("heat_stress"),
+            "thermal_anomaly": agronomy.get("thermal_anomaly_c"),
+            "vpd": agroclimate.get("vpd_kpa"),
+            "heat_dd": agronomy.get("heat_stress_dd"),
+            "humidity": agroclimate.get("relative_humidity"),
+            "trajectory_direction": (predictions.get("trajectory") or {}).get("direction"),
+            "gdd_stage": (growth_stage or {}).get("stage"),
+        }
+        _optical_age = v3_quality.days_since((ndvi_data or {}).get("image_date"))
+        fusion_result = v3_fusion.synthesize(signals, optical_age_days=_optical_age)
+        if fusion_result.get("findings"):
+            log.info(f"Fusion: {fusion_result['fused_count']} cross-checked diagnoses — "
+                     f"{[(f['diagnosis'], f['confidence']) for f in fusion_result['findings']]}")
+    except Exception as e:
+        log.warning(f"v3 fusion failed: {e}")
+
+    try:
+        if best_mandi and best_mandi.get("distance_km"):
+            best_mandi["fare_breakdown"] = v3_logistics.estimate_transport_fare(
+                best_mandi.get("distance_km"), req.quantity_quintals, crop)
+        if local_mandi and local_mandi.get("distance_km"):
+            local_mandi["fare_breakdown"] = v3_logistics.estimate_transport_fare(
+                local_mandi.get("distance_km"), req.quantity_quintals, crop)
+    except Exception as e:
+        log.warning(f"v3 fare estimate failed: {e}")
+
+    # Location confidence (worse of GPS accuracy and satellite-grid offset) + consolidated
+    # data freshness across every layer. Honest about WHERE and WHEN the advice stands.
+    location_quality = {}
+    freshness = {}
+    try:
+        location_quality = v3_quality.assess_location_quality(req.accuracy_m, sat_cache_distance_km)
+        freshness = v3_quality.summarize_freshness(
+            satellite_image_date=(ndvi_data or {}).get("image_date"),
+            cache_computed_at=_sat_cache.computed_at if _sat_cache.is_loaded else None,
+            agro_as_of=agroclimate.get("power_as_of"),
+            agro_live=bool(agroclimate.get("available")),
+            mandi_arrival_date=best_mandi.get("arrival_date") if best_mandi else None,
+            advisory_age_minutes=0,
+        )
+        if confidence is not None:
+            confidence["location"] = location_quality
+        if location_quality.get("level") in ("approximate", "area"):
+            log.info(f"Location {location_quality['level']} "
+                     f"(~{location_quality['effective_uncertainty_m']}m) — advice hedged to area level")
+    except Exception as e:
+        log.warning(f"v3 quality assessment failed: {e}")
+
     # 7. Generate advisory via Gemini with all pre-computed data
     advisory_text = await generate_advisory_with_gemini(
         language=req.language,
@@ -2656,6 +3101,14 @@ async def _run_advisory(req: AdvisoryRequest):
         cross_validation=cross_validation,
         satellite_extras=satellite_extras,
         price_history=price_history,
+        agroclimate=agroclimate,
+        index_assessment=index_assessment,
+        indices_map=indices_map,
+        predictions=predictions,
+        agronomy=agronomy,
+        fusion=fusion_result,
+        location_quality=location_quality,
+        freshness=freshness,
     )
 
     response_data = {
@@ -2673,6 +3126,16 @@ async def _run_advisory(req: AdvisoryRequest):
         "nearest_kvk": nearest_kvk,
         "cross_validation": cross_validation if cross_validation else [],
         "satellite_extras": satellite_extras if satellite_extras else {},
+        # v3 additions
+        "indices": indices_map,
+        "index_assessment": index_assessment,
+        "parameters_mapped": parameters_count,
+        "agroclimate": agroclimate if agroclimate else {},
+        "agronomy": agronomy if agronomy else {},
+        "fusion": fusion_result if fusion_result else {},
+        "location_quality": location_quality if location_quality else {},
+        "freshness": freshness if freshness else {},
+        "predictions": predictions if predictions else {},
         "advisory": advisory_text,
         "sources": {
             "mandi_prices": "AgMarkNet / data.gov.in (real-time)",
@@ -2686,6 +3149,11 @@ async def _run_advisory(req: AdvisoryRequest):
             "sar_soil_moisture": "Sentinel-1 SAR C-band radar via Google Earth Engine" if satellite_extras.get("sar") else "unavailable",
             "land_surface_temp": "MODIS Terra MOD11A1 (1km daily) via Google Earth Engine" if satellite_extras.get("lst") else "unavailable",
             "smap_root_moisture": "NASA SMAP L4 (9km root-zone) via Google Earth Engine" if satellite_extras.get("smap") else "unavailable",
+            "agroclimate": "; ".join(agroclimate.get("sources", [])) if agroclimate.get("sources") else "unavailable",
+            "copernicus_direct": copernicus.get("source") if copernicus.get("available") else "unavailable (optional, credential-gated)",
+            "sentinel3_olci": sentinel3.get("source") if sentinel3.get("available") else "unavailable (optional, credential-gated)",
+            "earthdata_gldas": earthdata.get("source") if earthdata.get("available") else "unavailable (optional, credential-gated)",
+            "prediction": "FAO-56 soil-water balance, NDVI trajectory regression, price trend model",
         },
     }
 
@@ -2830,7 +3298,7 @@ async def websocket_chat(ws: WebSocket):
     """WebSocket endpoint for Gemini Live farmer conversations.
 
     Protocol:
-    - Client sends: {"type": "config", "language": "hi", "latitude": 30.9, "longitude": 77.1}
+    - Client sends: {"type": "config", "language": "hi", "latitude": 30.9, "longitude": 77.1, "accuracy_m": 12}
     - Client sends: {"type": "audio", "data": "<base64 PCM 16kHz mono>"}
     - Server sends: {"type": "audio", "data": "<base64 PCM 24kHz mono>"}
     - Server sends: {"type": "transcript", "speaker": "farmer"|"kisanmind", "text": "..."}
@@ -2850,6 +3318,7 @@ async def websocket_chat(ws: WebSocket):
                 language = msg.get("language", "hi")
                 latitude = msg.get("latitude", 0)
                 longitude = msg.get("longitude", 0)
+                accuracy = msg.get("accuracy_m", msg.get("accuracy", 0))  # accept the standard key
                 has_gps = latitude != 0 and longitude != 0
 
                 locale = LANGUAGE_TO_LOCALE.get(language, "hi-IN")
@@ -2883,7 +3352,7 @@ async def websocket_chat(ws: WebSocket):
                 async def _on_tool_call(name: str, args: dict) -> dict:
                     if ws.client_state == WebSocketState.CONNECTED:
                         await ws.send_json({"type": "status", "status": "fetching_data"})
-                    result = await _handle_tool_call(name, args, latitude, longitude, language)
+                    result = await _handle_tool_call(name, args, latitude, longitude, language, accuracy)
                     if ws.client_state == WebSocketState.CONNECTED:
                         await ws.send_json({"type": "status", "status": "ready"})
                     return result
@@ -3186,7 +3655,7 @@ async def text_chat(req: ChatRequest):
                     fc = part.function_call
                     tool_result = await _handle_tool_call(
                         fc.name, dict(fc.args),
-                        req.latitude, req.longitude, req.language
+                        req.latitude, req.longitude, req.language, req.accuracy_m
                     )
 
                     session["history"].append({
