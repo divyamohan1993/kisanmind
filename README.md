@@ -199,6 +199,12 @@ NDVI alone saturates, ignores water and nitrogen, and lies during ripening. Kisa
   Copernicus Data Space (optional). If one source is down, the rest carry the advisory.
 - Fixes the legacy EVI scaling bug; every value is range-checked before use.
 
+> **Coverage, honestly:** the agro-climate signals (ET, soil moisture, solar, VPD) and the
+> base satellite layer reach every farmer **live, today**. The full 14-index optical set is
+> computed on the live Earth-Engine path and via Copernicus immediately; for pre-cached
+> locations it lands after a one-time `precompute_satellite.py` rerun. The system reports
+> `parameters_mapped` on every advisory so coverage is never overstated.
+
 ### Prediction & Agentic Verification
 - **Days until irrigation** — FAO-56 soil-water balance from real root-zone moisture + ET +
   rain forecast. The single most actionable number a farmer gets.

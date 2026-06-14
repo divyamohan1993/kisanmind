@@ -2804,18 +2804,15 @@ async def _run_advisory(req: AdvisoryRequest):
     predictions: dict = {}
     parameters_count = 0
     copernicus = {"available": False}
-    # Bounded awaits — these started in parallel at the top of the request, so they are
-    # almost always already done; the ceiling just guarantees a hung source can never stall.
+    # Bounded await — both started in parallel at the top of the request, so they are almost
+    # always already done by here; a single ceiling over the pair caps the pathological worst
+    # case (instead of stacking two timeouts) and guarantees a hung source never stalls.
     try:
-        agroclimate = await asyncio.wait_for(agroclimate_task, timeout=15.0)
+        agroclimate, copernicus = await asyncio.wait_for(
+            asyncio.gather(agroclimate_task, copernicus_task), timeout=20.0)
     except Exception as e:
-        log.warning(f"v3 agroclimate await timed out/failed: {e}")
-        agroclimate = {}
-    try:
-        copernicus = await asyncio.wait_for(copernicus_task, timeout=22.0)
-    except Exception as e:
-        log.info(f"v3 copernicus await timed out/failed: {e}")
-        copernicus = {"available": False}
+        log.warning(f"v3 agroclimate/copernicus timed out/failed: {e}")
+        agroclimate, copernicus = {}, {"available": False}
     log.info(f"Agro-climate: {len(agroclimate.get('sources', []))} sources, "
              f"Copernicus-direct: {copernicus.get('available')}")
 

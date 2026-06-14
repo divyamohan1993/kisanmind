@@ -86,3 +86,33 @@ through translation + TTS unchanged.
 - Budget ₹0 → only free/no-key sources live; paid/credential sources graceful-optional.
 - Don't break the running hackathon app. Every addition best-effort with fallback.
 - Can't run full backend locally (no fastapi/EE/keys) → unit-test pure modules + live-probe no-key APIs + syntax-check integration.
+
+---
+
+# STATUS & DEPLOY RUNBOOK (read this first)
+
+## Status — built overnight, autonomous
+- **Branch:** `feat/v3-multiparam-sensing` — **committed, NOT pushed, NOT deployed.** `main` is untouched; the live app at kisanmind.dmj.one still runs v2.
+- **Verified:** `python scripts/verify_v3.py` → **39/39** checks, including LIVE NASA POWER + Open-Meteo and a full enrichment+verification simulation. All backend modules `py_compile` clean. The EVI scaling bug is fixed and the legacy bad cache value is null-guarded.
+- **NOT verified (no way to, tonight):** `main.py` was never run as a server — there is no `.env`, and `fastapi`/`earthengine`/`google-cloud`/`genai` are not installed locally. Wiring was checked by compile + code inspection + a simulation that mirrors `_run_advisory`. First real server run is step 3 below.
+
+## What reaches farmers, precisely (no overclaim)
+- **Live today on merge:** agro-climate parameters (ET, root/surface soil moisture, solar, VPD, soil temp — NASA POWER + Open-Meteo, no key) + base satellite (NDVI, SAR moisture, MODIS LST, SMAP) + **FAO-56 irrigation forecast** + diesel transport fare + agentic verification. That's ~9–11 mapped parameters per request, fetched fresh.
+- **After the precompute rerun (step 4):** the full 14-index Sentinel-2 set for cached locations → 15–20+ parameters. Until then those extra optical indices appear only on live-EE cache-miss requests and via Copernicus.
+- Every advisory returns `parameters_mapped` so coverage is honest at runtime.
+
+## Deploy sequence (when you're awake)
+1. **Review the diff:** `git log main..feat/v3-multiparam-sensing`, skim `backend/main.py` changes.
+2. **Merge:** `git checkout main && git merge feat/v3-multiparam-sensing`.
+3. **First real run (smoke test) with real `.env`:** start the backend, hit `GET /api/health`, then `POST /api/advisory` for a cached location (e.g. Solan 30.9,77.1, crop tomato). Confirm 200 + new fields (`indices`, `predictions.irrigation`, `agroclimate`, `parameters_mapped`). If anything 500s, the v3 blocks are all try/except → it degrades to v2; check logs for `v3 ... failed` warnings.
+4. **Populate full 15+ for cached locations (needs EE creds):** `python scripts/precompute_satellite.py --all-india` (or per-region). This writes the new indices into `data/satellite_cache/latest.json` with correct EVI.
+5. **Deploy** via the normal GitHub → VM path. Cloudflare proxy unchanged.
+
+## Optional toggles (your call)
+- **LLM-in-the-loop verifier:** the live gate runs deterministic cross-parameter + price-grounding + safety checks over all 15+ params and regenerates once on a grounding failure (the agentic verification). The extra *LLM* auditor in `verification.py` is wired but **off on the live path** (`gemini_call=None`) to avoid per-advisory latency; the existing background LLM fact-check still logs. To put the LLM in the blocking loop, pass a `gemini_call` that wraps `_gemini_generate` in `run_in_executor` (don't call it sync — it would block the event loop).
+- **Copernicus-direct provider:** set `CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET` (free at dataspace.copernicus.eu) to fetch S2 indices straight from ESA, no GEE.
+- **Diesel price:** `DIESEL_PRICE_PER_L` tunes the transport fare model (defaults ~₹90/l).
+
+## Files added / changed
+- New: `backend/indices.py`, `agroclimate.py`, `prediction.py`, `logistics.py`, `verification.py`, `copernicus.py`; `scripts/verify_v3.py`; `docs/UPGRADE_V3.md`.
+- Changed: `backend/main.py` (enrichment + prompt + verification gate + voice), `satellite_cache.py` (EVI guard + index passthrough), `scripts/precompute_satellite.py` (EVI fix + 14 indices), `tests/test_e2e.py`, `frontend/app/page.tsx` (copy), `README.md`, `CHANGELOG.md`, `.env.example`.
