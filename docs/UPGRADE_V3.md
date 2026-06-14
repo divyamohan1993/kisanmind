@@ -110,9 +110,13 @@ through translation + TTS unchanged.
 
 ## Optional toggles (your call)
 - **LLM-in-the-loop verifier:** the live gate runs deterministic cross-parameter + price-grounding + safety checks over all 15+ params and regenerates once on a grounding failure (the agentic verification). The extra *LLM* auditor in `verification.py` is wired but **off on the live path** (`gemini_call=None`) to avoid per-advisory latency; the existing background LLM fact-check still logs. To put the LLM in the blocking loop, pass a `gemini_call` that wraps `_gemini_generate` in `run_in_executor` (don't call it sync — it would block the event loop).
-- **Copernicus-direct provider:** set `CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET` (free at dataspace.copernicus.eu) to fetch S2 indices straight from ESA, no GEE.
+- **Copernicus Sentinel-2 + Sentinel-3 (one key):** set `CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET` (free at dataspace.copernicus.eu). Unlocks direct Sentinel-2 indices AND Sentinel-3 OLCI (OTCI chlorophyll + daily NDVI cloud gap-fill) — both straight from ESA, no GEE.
+- **NASA Earthdata (independent soil/ET):** set `EARTHDATA_TOKEN` (free at urs.earthdata.nasa.gov). Adds GLDAS root-zone moisture, soil profile, ET and surface temp — a third independent water source that strengthens the verification gate.
 - **Diesel price:** `DIESEL_PRICE_PER_L` tunes the transport fare model (defaults ~₹90/l).
+- **Runtime parameter list:** `GET /api/parameters` returns all 22 parameters grouped by family with each source + which providers are configured. Verifiable smoke test after deploy.
+
+> The two ESA/NASA clusters above are **credential-gated and untested until the keys exist** (same status as Copernicus). Each returns `{"available": false}` with zero network calls when its key is unset, so they cannot affect the app until enabled. Their no-key paths and parsers are unit-tested in `scripts/verify_v3.py`; their live paths run on first request after you add the key.
 
 ## Files added / changed
-- New: `backend/indices.py`, `agroclimate.py`, `prediction.py`, `logistics.py`, `verification.py`, `copernicus.py`; `scripts/verify_v3.py`; `docs/UPGRADE_V3.md`.
+- New: `backend/indices.py`, `agroclimate.py`, `prediction.py`, `logistics.py`, `verification.py`, `copernicus.py` (Sentinel-2 + Sentinel-3), `earthdata.py` (NASA GLDAS); `scripts/verify_v3.py`; `docs/UPGRADE_V3.md`. New endpoint `GET /api/parameters`.
 - Changed: `backend/main.py` (enrichment + prompt + verification gate + voice), `satellite_cache.py` (EVI guard + index passthrough), `scripts/precompute_satellite.py` (EVI fix + 14 indices), `tests/test_e2e.py`, `frontend/app/page.tsx` (copy), `README.md`, `CHANGELOG.md`, `.env.example`.

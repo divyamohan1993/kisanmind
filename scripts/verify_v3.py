@@ -223,6 +223,26 @@ async def test_integration_sim():
     check("fare attaches to recommended mandi", bool(fare) and fare["per_quintal"] > 0)
 
 
+async def test_new_clusters():
+    """Sentinel-3 + NASA Earthdata providers: graceful no-cred paths + parser correctness."""
+    print("\n== new satellite clusters: Sentinel-3 (CDSE) + NASA Earthdata (GLDAS) ==")
+    from backend import copernicus, earthdata
+    s3 = await copernicus.fetch_sentinel3_indices(30.9, 77.1)
+    check("Sentinel-3 graceful without CDSE creds", s3.get("available") is False
+          and s3.get("reason") == "no_cdse_credentials")
+    ed = await earthdata.fetch_earthdata(30.9, 77.1)
+    check("Earthdata graceful without token", ed.get("available") is False
+          and ed.get("reason") == "no_earthdata_token")
+    # Data Rods asc2 parser: chronological rows, skip fill (-9999), take newest valid.
+    sample = ("Date&Time\tRootMoist_inst\n2026-06-10T00:00\t412.5\n"
+              "2026-06-10T03:00\t-9999.0\n2026-06-10T06:00\t408.7")
+    check("Earthdata parser skips fill, takes newest", earthdata._latest_value(sample) == 408.7)
+    check("OTCI registered + classified", indices.classify_otci(2.5) == "adequate"
+          and any(p["key"] == "otci" for p in indices.PARAMETER_REGISTRY))
+    check("registry now 22 parameters", len(indices.PARAMETER_REGISTRY) == 22,
+          f"{len(indices.PARAMETER_REGISTRY)}")
+
+
 def main():
     test_indices()
     test_prediction()
@@ -236,6 +256,10 @@ def main():
         asyncio.run(test_integration_sim())
     except Exception as e:
         check("integration sim", False, f"error: {e}")
+    try:
+        asyncio.run(test_new_clusters())
+    except Exception as e:
+        check("new clusters", False, f"error: {e}")
 
     print("\n" + "=" * 50)
     n_pass = sum(1 for _, ok in results if ok)

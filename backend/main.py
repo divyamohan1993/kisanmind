@@ -298,14 +298,16 @@ try:
     from backend import logistics as v3_logistics
     from backend import verification as v3_verification
     from backend.agroclimate import fetch_agroclimate
-    from backend.copernicus import fetch_copernicus_indices
+    from backend.copernicus import fetch_copernicus_indices, fetch_sentinel3_indices
+    from backend.earthdata import fetch_earthdata
 except ImportError:
     import indices as v3_indices
     import prediction as v3_prediction
     import logistics as v3_logistics
     import verification as v3_verification
     from agroclimate import fetch_agroclimate
-    from copernicus import fetch_copernicus_indices
+    from copernicus import fetch_copernicus_indices, fetch_sentinel3_indices
+    from earthdata import fetch_earthdata
 
 # ---------------------------------------------------------------------------
 # Gemini Live sessions (one per active call)
@@ -2369,6 +2371,34 @@ async def health():
     }
 
 
+@app.get("/api/parameters")
+async def list_parameters():
+    """Every crop-growth parameter KisanMind maps, grouped by family, with its data source and
+    which providers are configured. Answers 'what parameters like NDVI are you using?' live."""
+    registry = v3_indices.PARAMETER_REGISTRY
+    by_family: dict[str, list] = {}
+    for p in registry:
+        by_family.setdefault(p["family"], []).append(
+            {"key": p["key"], "name": p["name"], "measures": p["measures"], "source": p["source"]})
+    providers = {
+        "earth_engine_sentinel2_sentinel1_modis_smap": "active" if EE_INITIALIZED else "unavailable",
+        "satellite_cache": _sat_cache.is_loaded,
+        "nasa_power": "live (no key)",
+        "open_meteo": "live (no key)",
+        "copernicus_dataspace_sentinel2_sentinel3": "configured"
+            if (os.getenv("CDSE_CLIENT_ID") and os.getenv("CDSE_CLIENT_SECRET")) else "set CDSE_CLIENT_ID/SECRET",
+        "nasa_earthdata_gldas": "configured" if os.getenv("EARTHDATA_TOKEN") else "set EARTHDATA_TOKEN",
+    }
+    return {
+        "total_parameters": len(registry),
+        "families": by_family,
+        "providers": providers,
+        "note": ("Agro-climate parameters (ET, soil moisture, solar, VPD) and base satellite "
+                 "signals are live with no key. The full optical index set needs live Earth "
+                 "Engine, Copernicus credentials, or a precompute rerun."),
+    }
+
+
 @app.post("/api/ndvi")
 async def get_ndvi(req: NDVIRequest):
     """Get satellite vegetation indices — local cache first, Earth Engine fallback."""
@@ -2679,6 +2709,8 @@ async def _run_advisory(req: AdvisoryRequest):
     # optional direct-Copernicus index fetch. Both best-effort, both run in parallel.
     agroclimate_task = asyncio.create_task(_safe_coro(fetch_agroclimate(req.latitude, req.longitude), {}))
     copernicus_task = asyncio.create_task(_safe_coro(fetch_copernicus_indices(req.latitude, req.longitude), {"available": False}))
+    sentinel3_task = asyncio.create_task(_safe_coro(fetch_sentinel3_indices(req.latitude, req.longitude), {"available": False}))
+    earthdata_task = asyncio.create_task(_safe_coro(fetch_earthdata(req.latitude, req.longitude), {"available": False}))
 
     # Live EE calls only if cache missed
     ndvi_task = None
@@ -2804,17 +2836,21 @@ async def _run_advisory(req: AdvisoryRequest):
     predictions: dict = {}
     parameters_count = 0
     copernicus = {"available": False}
-    # Bounded await — both started in parallel at the top of the request, so they are almost
-    # always already done by here; a single ceiling over the pair caps the pathological worst
-    # case (instead of stacking two timeouts) and guarantees a hung source never stalls.
+    sentinel3 = {"available": False}
+    earthdata = {"available": False}
+    # Bounded await — all started in parallel at the top of the request, so they are almost
+    # always already done by here; a single ceiling over the group caps the pathological worst
+    # case (instead of stacking timeouts) and guarantees a hung source never stalls.
     try:
-        agroclimate, copernicus = await asyncio.wait_for(
-            asyncio.gather(agroclimate_task, copernicus_task), timeout=20.0)
+        agroclimate, copernicus, sentinel3, earthdata = await asyncio.wait_for(
+            asyncio.gather(agroclimate_task, copernicus_task, sentinel3_task, earthdata_task),
+            timeout=20.0)
     except Exception as e:
-        log.warning(f"v3 agroclimate/copernicus timed out/failed: {e}")
-        agroclimate, copernicus = {}, {"available": False}
-    log.info(f"Agro-climate: {len(agroclimate.get('sources', []))} sources, "
-             f"Copernicus-direct: {copernicus.get('available')}")
+        log.warning(f"v3 external satellite/agro sources timed out/failed: {e}")
+        agroclimate, copernicus, sentinel3, earthdata = {}, {"available": False}, {"available": False}, {"available": False}
+    log.info(f"Agro-climate: {len(agroclimate.get('sources', []))} sources, Copernicus-S2: "
+             f"{copernicus.get('available')}, Sentinel-3: {sentinel3.get('available')}, "
+             f"Earthdata-GLDAS: {earthdata.get('available')}")
 
     try:
         # Optical parameter map from whatever sources answered (cache, live-EE, Copernicus).
@@ -2833,6 +2869,12 @@ async def _run_advisory(req: AdvisoryRequest):
             for k in ("ndvi", "ndre", "ndmi", "evi", "savi", "psri"):
                 if copernicus.get(k) is not None and indices_map.get(k) is None:
                     indices_map[k] = copernicus[k]
+        # Sentinel-3 OLCI — independent chlorophyll (OTCI) + same-day NDVI cloud gap-fill.
+        if sentinel3.get("available"):
+            if sentinel3.get("otci") is not None:
+                indices_map["otci"] = sentinel3["otci"]
+            if indices_map.get("ndvi") is None and sentinel3.get("s3_ndvi") is not None:
+                indices_map["ndvi"] = sentinel3["s3_ndvi"]
         indices_map = {k: v for k, v in indices_map.items() if v is not None}
         index_assessment = v3_indices.build_index_assessment(indices_map)
         parameters_count = v3_indices.count_available_parameters(indices_map, satellite_extras, agroclimate)
@@ -2841,8 +2883,14 @@ async def _run_advisory(req: AdvisoryRequest):
         log.warning(f"v3 indices assembly failed: {e}")
 
     try:
+        # Root-zone moisture from the first independent source that answered:
+        # SMAP (satellite) → Open-Meteo (agroclimate) → NASA Earthdata GLDAS (model).
         smap_root = (satellite_extras.get("smap") or {}).get("rootzone_moisture_m3m3")
-        root_moist = smap_root if smap_root is not None else agroclimate.get("soil_moisture_root_m3m3")
+        root_moist = smap_root
+        if root_moist is None:
+            root_moist = agroclimate.get("soil_moisture_root_m3m3")
+        if root_moist is None:
+            root_moist = earthdata.get("rootzone_moisture_m3m3")
         fc = agroclimate.get("forecast", {}) or {}
         rain_fc = [(d.get("precipitation_mm") or 0) for d in weather.get("daily_forecast", [])] \
             or fc.get("rain_forecast_mm")
@@ -2935,6 +2983,8 @@ async def _run_advisory(req: AdvisoryRequest):
             "smap_root_moisture": "NASA SMAP L4 (9km root-zone) via Google Earth Engine" if satellite_extras.get("smap") else "unavailable",
             "agroclimate": "; ".join(agroclimate.get("sources", [])) if agroclimate.get("sources") else "unavailable",
             "copernicus_direct": copernicus.get("source") if copernicus.get("available") else "unavailable (optional, credential-gated)",
+            "sentinel3_olci": sentinel3.get("source") if sentinel3.get("available") else "unavailable (optional, credential-gated)",
+            "earthdata_gldas": earthdata.get("source") if earthdata.get("available") else "unavailable (optional, credential-gated)",
             "prediction": "FAO-56 soil-water balance, NDVI trajectory regression, price trend model",
         },
     }

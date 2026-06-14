@@ -123,3 +123,75 @@ async def fetch_copernicus_indices(lat: float, lon: float, timeout: float = 20.0
             vals["source"] = "Copernicus Data Space Ecosystem (Sentinel-2 L2A, direct — no GEE)"
             return vals
     return {"available": False, "reason": "no_valid_imagery"}
+
+
+# Sentinel-3 OLCI — a SECOND ESA cluster (300m, near-daily revisit) that gap-fills Sentinel-2's
+# 5-day cloud gaps. OTCI is a real chlorophyll index; OLCI-NDVI corroborates greenness daily.
+# OTCI = (B12 - B11) / (B11 - B10) using OLCI bands Oa10(681), Oa11(709), Oa12(754) nm.
+_OLCI_EVALSCRIPT = """//VERSION=3
+function setup() {
+  return {
+    input: [{bands: ["B08","B10","B11","B12","B17","dataMask"]}],
+    output: [{id: "otci", bands: 1}, {id: "s3_ndvi", bands: 1}, {id: "dataMask", bands: 1}]
+  };
+}
+function evaluatePixel(s) {
+  let otci = (s.B12 - s.B11) / (s.B11 - s.B10);
+  let ndvi = (s.B17 - s.B08) / (s.B17 + s.B08);
+  return {otci: [otci], s3_ndvi: [ndvi], dataMask: [s.dataMask]};
+}
+"""
+
+
+async def fetch_sentinel3_indices(lat: float, lon: float, timeout: float = 20.0) -> dict:
+    """Sentinel-3 OLCI chlorophyll (OTCI) + daily NDVI direct from CDSE. Same credentials as
+    Sentinel-2; another satellite cluster, no Earth Engine. Optional/graceful."""
+    cid = os.getenv("CDSE_CLIENT_ID", "")
+    secret = os.getenv("CDSE_CLIENT_SECRET", "")
+    if not cid or not secret:
+        return {"available": False, "reason": "no_cdse_credentials"}
+
+    end = datetime.utcnow()
+    start = end - timedelta(days=14)  # OLCI revisits near-daily; short window suffices
+    body = {
+        "input": {
+            "bounds": {"bbox": _bbox(lat, lon, half_deg=0.02),
+                       "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}},
+            "data": [{"type": "sentinel-3-olci"}],
+        },
+        "aggregation": {
+            "timeRange": {"from": start.strftime("%Y-%m-%dT00:00:00Z"),
+                          "to": end.strftime("%Y-%m-%dT23:59:59Z")},
+            "aggregationInterval": {"of": "P3D"},
+            "evalscript": _OLCI_EVALSCRIPT,
+            "resx": 300, "resy": 300,
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            token = await _get_token(client, cid, secret)
+            if not token:
+                return {"available": False, "reason": "token_failed"}
+            resp = await client.post(_STATS_URL, json=body,
+                                     headers={"Authorization": f"Bearer {token}"})
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        log.info(f"CDSE Sentinel-3 unavailable: {e}")
+        return {"available": False, "reason": str(e)[:120]}
+
+    for interval in sorted(data.get("data", []),
+                           key=lambda i: i.get("interval", {}).get("to", ""), reverse=True):
+        outputs = interval.get("outputs", {})
+        vals = {}
+        for key in ("otci", "s3_ndvi"):
+            stats = outputs.get(key, {}).get("bands", {}).get("B0", {}).get("stats", {})
+            mean = stats.get("mean")
+            if mean is not None and stats.get("sampleCount", 0) > stats.get("noDataCount", 0):
+                vals[key] = round(mean, 4)
+        if vals:
+            vals["available"] = True
+            vals["image_date"] = interval.get("interval", {}).get("to", "")[:10]
+            vals["source"] = "Copernicus Sentinel-3 OLCI (300m, near-daily, direct — no GEE)"
+            return vals
+    return {"available": False, "reason": "no_valid_imagery"}

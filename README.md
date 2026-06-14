@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat-square&logo=fastapi&logoColor=white" />
   <img src="https://img.shields.io/badge/Gemini-3_Flash-4285F4?style=flat-square&logo=google&logoColor=white" />
   <img src="https://img.shields.io/badge/Growth_Params-20+-FF6F00?style=flat-square&logo=satellite&logoColor=white" />
-  <img src="https://img.shields.io/badge/Open_Data-6_Sources-009688?style=flat-square" />
+  <img src="https://img.shields.io/badge/Open_Data-8_Sources-009688?style=flat-square" />
   <img src="https://img.shields.io/badge/Languages-22-138808?style=flat-square" />
   <img src="https://img.shields.io/badge/WCAG-2.2_AAA-1a365d?style=flat-square" />
   <img src="https://img.shields.io/github/license/divyamohan1993/kisanmind?style=flat-square" />
@@ -20,7 +20,7 @@
 <h3 align="center">Satellite-to-Voice Agricultural Intelligence for 150M Indian Farmers</h3>
 
 <p align="center">
-  <b>20+ Growth Parameters</b> &middot; <b>6 Open Data Sources (beyond Earth Engine)</b> &middot; <b>Predicts Irrigation & Harvest</b> &middot; <b>Agentic Verification</b> &middot; <b>Voice in 22 Languages</b>
+  <b>22 Growth Parameters</b> &middot; <b>8 Satellite/Open-Data Sources (beyond Earth Engine)</b> &middot; <b>Predicts Irrigation & Harvest</b> &middot; <b>Agentic Verification</b> &middot; <b>Voice in 22 Languages</b>
 </p>
 
 <p align="center">
@@ -195,9 +195,12 @@ NDVI alone saturates, ignores water and nitrogen, and lies during ripening. Kisa
 - **Chlorophyll / nitrogen** — NDRE, GNDVI, CIred-edge *(catches deficiency green canopy hides)*
 - **Water** — NDMI/NMDI (canopy), Sentinel-1 SAR + SMAP + NASA POWER (soil), ET & VPD (demand)
 - **Phenology / stress** — PSRI (ripening), MODIS LST (heat), GDD (thermal time), NBR
-- **Sources beyond Earth Engine** — NASA POWER & Open-Meteo (live, no key) and direct
-  Copernicus Data Space (optional). If one source is down, the rest carry the advisory.
+- **8 sources, beyond Earth Engine** — Sentinel-2/-1, MODIS, SMAP (via GEE); **NASA POWER**
+  & **Open-Meteo** (live, no key); **Copernicus Sentinel-2 + Sentinel-3 OLCI** (direct from
+  ESA); **NASA Earthdata GLDAS** (independent soil/ET). If one source is down, the rest carry
+  the advisory; independent sources let the verifier trust agreeing signals.
 - Fixes the legacy EVI scaling bug; every value is range-checked before use.
+- `GET /api/parameters` lists all 22 parameters by family with their source, at runtime.
 
 > **Coverage, honestly:** the agro-climate signals (ET, soil moisture, solar, VPD) and the
 > base satellite layer reach every farmer **live, today**. The full 14-index optical set is
@@ -329,6 +332,7 @@ Languages without native TTS are auto-translated to Hindi for speech synthesis.
 | `POST` | `/api/voice/process` | Twilio webhook — speech processing + TwiML response |
 | `WS` | `/ws/chat` | WebSocket for Gemini Live voice streaming |
 | `GET` | `/api/health` | Service health + API availability check |
+| `GET` | `/api/parameters` | All 22 growth parameters by family + source + provider status |
 | `GET` | `/api/beep` | Base64 WAV alert tone for advisory notifications |
 
 ---

@@ -16,6 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Direct Copernicus provider** (`backend/copernicus.py`): Sentinel-2 indices straight from
   the Copernicus Data Space Ecosystem (Sentinel Hub Statistical API) — no GEE. Credential-gated
   (`CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET`), graceful when absent.
+- **Sentinel-3 OLCI cluster** (`backend/copernicus.py`): OTCI chlorophyll + 300m near-daily
+  NDVI that gap-fills Sentinel-2's cloud cover. Same CDSE credentials, no GEE.
+- **NASA Earthdata cluster** (`backend/earthdata.py`): GLDAS-Noah root-zone moisture, 3-layer
+  soil profile, ET and surface temperature via GES DISC Data Rods — a third independent
+  soil-water source for cross-validation. Token-gated (`EARTHDATA_TOKEN`), graceful when absent.
+- `GET /api/parameters`: lists all 22 parameters by family with sources + provider status.
 - **Prediction layer** (`backend/prediction.py`): FAO-56 soil-water-balance "days until
   irrigation" forecast (flagship), honest NDVI-trajectory regression (never extrapolates from
   one observation), short-horizon price guidance, harvest-window estimate.

@@ -37,6 +37,7 @@ INDEX_VALID_RANGE = {
     "ndre": (-1.0, 1.0), "gndvi": (-1.0, 1.0), "ci_rededge": (-1.0, 12.0),
     "psri": (-1.0, 1.0), "ndmi": (-1.0, 1.0), "nmdi": (-1.0, 1.0),
     "ndwi_water": (-1.0, 1.0), "nbr": (-1.0, 1.0), "lai": (0.0, 8.0), "fapar": (0.0, 1.0),
+    "otci": (0.0, 6.0),  # Sentinel-3 OLCI Terrestrial Chlorophyll Index
 }
 
 
@@ -223,6 +224,19 @@ def classify_lai(v: Optional[float]) -> str:
     return "very_sparse"
 
 
+def classify_otci(v: Optional[float]) -> str:
+    """Sentinel-3 OLCI chlorophyll. Corroborates NDRE from an independent satellite."""
+    if v is None:
+        return "unknown"
+    if v >= 3.0:
+        return "high"
+    if v >= 2.0:
+        return "adequate"
+    if v >= 1.0:
+        return "low"
+    return "deficient"
+
+
 # Plain-language templates. Deliberately jargon-free: the farmer never hears "NDRE".
 # {status} is filled from the classify_* result; downstream translation handles language.
 _FARMER_LINES = {
@@ -283,6 +297,8 @@ PARAMETER_REGISTRY = [
      "measures": "Chlorophyll concentration via green band.", "kind": "index"},
     {"key": "ci_rededge", "name": "Chlorophyll index (CIre)", "family": "chlorophyll", "source": "s2",
      "measures": "Canopy chlorophyll content.", "kind": "index"},
+    {"key": "otci", "name": "OLCI chlorophyll (OTCI)", "family": "chlorophyll", "source": "sentinel3",
+     "measures": "Chlorophyll from Sentinel-3 (independent satellite, near-daily).", "kind": "index"},
     {"key": "psri", "name": "Senescence (PSRI)", "family": "phenology", "source": "s2",
      "measures": "Plant ageing / ripening — harvest timing.", "kind": "index"},
     {"key": "ndmi", "name": "Canopy water (NDMI)", "family": "water", "source": "s2",
