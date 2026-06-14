@@ -27,6 +27,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   indices count once, and disagreement is flagged as a conflict rather than guessed. The
   advisory leads with this combined diagnosis; the verification gate flags advisories that
   ignore a high-confidence fused finding. Response adds a `fusion` block.
+- **Location accuracy + data freshness** (`backend/quality.py`): GPS accuracy now flows from the
+  client to the backend; location confidence is the worse of GPS accuracy and the satellite-grid
+  offset, and approximate/area-level fixes (e.g. IP fallback ~50 km) get an honest area-level
+  caveat instead of being treated as exact. Consolidated per-layer freshness (NASA POWER's 2-3
+  day lag now exposed via `power_as_of`); fusion drops optical-derived diagnoses one confidence
+  level on a >7-day-old image. Response adds `location_quality` and `freshness` blocks.
 
 ## [3.0.0] - 2026-06-14
 
