@@ -298,6 +298,7 @@ try:
     from backend import logistics as v3_logistics
     from backend import verification as v3_verification
     from backend import agronomy as v3_agronomy
+    from backend import fusion as v3_fusion
     from backend.agroclimate import fetch_agroclimate
     from backend.copernicus import fetch_copernicus_indices, fetch_sentinel3_indices
     from backend.earthdata import fetch_earthdata
@@ -307,6 +308,7 @@ except ImportError:
     import logistics as v3_logistics
     import verification as v3_verification
     import agronomy as v3_agronomy
+    import fusion as v3_fusion
     from agroclimate import fetch_agroclimate
     from copernicus import fetch_copernicus_indices, fetch_sentinel3_indices
     from earthdata import fetch_earthdata
@@ -1253,6 +1255,7 @@ async def generate_advisory_with_gemini(
     indices_map: dict = None,
     predictions: dict = None,
     agronomy: dict = None,
+    fusion: dict = None,
 ) -> str:
     """Send pre-computed inferences to Gemini and get a human, conversational advisory."""
     language_name = LANGUAGE_NAMES.get(language, "Hindi")
@@ -1459,6 +1462,21 @@ If farmer reports recent spraying -> note that satellite data may not reflect th
     if _fb and _fb.get("farmer_line"):
         fare_section = f"TRANSPORT FARE (real diesel + distance estimate): {_fb['farmer_line']}"
 
+    # v3.1: fused multi-sensor diagnosis — the COMBINED picture. Lead the advisory with this;
+    # it already weighs independent sensors against each other (agreement = confidence).
+    fusion_section = ""
+    if fusion and fusion.get("findings"):
+        flines = ["COMBINED MULTI-SENSOR DIAGNOSIS (already cross-checked across independent "
+                  "satellites/sensors — LEAD with these; more agreeing sensors = more certain):"]
+        for f in fusion["findings"]:
+            if f.get("conflict"):
+                tag = "sensors DISAGREE — hedge, suggest a hand check"
+            else:
+                tag = (f"{f['confidence']} confidence — {f['independent_bases_agreeing']} of "
+                       f"{f['independent_bases_checked']} independent sensors agree")
+            flines.append(f"  [{f['diagnosis'].upper()}] {f['farmer_line']} ({tag})")
+        fusion_section = "\n".join(flines)
+
     prompt = f"""You are KisanMind — a wise, warm farming neighbor who uses modern data to help. Generate advisory in PLAIN ENGLISH first (it will be translated later).
 
 PERSONALITY RULES:
@@ -1505,6 +1523,8 @@ Extra earning at best mandi: Rs {price_advantage}/quintal more
 {top_mandis_section}
 {quantity_section}
 
+{fusion_section}
+
 {satellite_section}
 {stage_section}
 
@@ -1527,7 +1547,7 @@ WEATHER (today's forecast from Open-Meteo):
 {_build_cross_validation_section(cross_validation)}
 
 OUTPUT FORMAT (in this order, keep under 150 words total):
-1. Crop health — satellite data cross-referenced with farmer observations (1-2 sentences)
+1. Crop health — LEAD with the COMBINED MULTI-SENSOR DIAGNOSIS if present (say e.g. "several satellites agree..."), cross-referenced with farmer observations (1-2 sentences)
 2. Water forecast — if a WATER FORECAST is given, state plainly when to irrigate (1 sentence). This is high priority.
 3. Farmer's problem response — directly address what they reported, if any (1-2 sentences, skip if none)
 4. Weather action (1 sentence, specific DO or DON'T with date)
@@ -1571,6 +1591,7 @@ End with: "Yeh aaj ki data ke hisaab se hai. Final faisla aapka hai."
             "agroclimate": agroclimate or {}, "growth_stage": growth_stage or {},
             "cross_validation": cross_validation or [],
             "irrigation_forecast": (predictions or {}).get("irrigation", {}),
+            "fusion": fusion or {},
             "ndvi_status": _status(v3_indices.classify_ndvi, "ndvi"),
             "ndre_status": _status(v3_indices.classify_ndre, "ndre"),
             "ndmi_status": _status(v3_indices.classify_ndmi, "ndmi"),
@@ -2589,6 +2610,7 @@ async def _handle_tool_call(
         agro = result.get("agroclimate", {}) or {}
         preds = result.get("predictions", {}) or {}
         agronomy_data = result.get("agronomy", {}) or {}
+        fusion_data = result.get("fusion", {}) or {}
 
         data = {
             "location": f"{location.get('location_name', '?')}, {location.get('state', '?')}",
@@ -2652,6 +2674,14 @@ async def _handle_tool_call(
             "growth_prediction": preds.get("trajectory", {}).get("farmer_line", ""),
             "harvest_prediction": preds.get("harvest", {}).get("farmer_line", ""),
             "field_alerts": list((agronomy_data.get("interpretation") or {}).values()),
+            "combined_diagnosis": {
+                "summary": fusion_data.get("picture", ""),
+                "findings": [
+                    {"issue": f.get("diagnosis"), "verdict": f.get("verdict"),
+                     "confidence": f.get("confidence"), "say": f.get("farmer_line")}
+                    for f in fusion_data.get("findings", [])
+                ],
+            },
             "parameters_total": result.get("parameters_mapped", 0),
             "agro_climate": {
                 "daily_water_use_mm": agro.get("et0_mm_day") or agro.get("et_mm_day"),
@@ -2946,6 +2976,49 @@ async def _run_advisory(req: AdvisoryRequest):
     except Exception as e:
         log.warning(f"v3 predictions failed: {e}")
 
+    # -------- Multi-sensor fusion: combine the 44 params into cross-checked diagnoses where
+    # agreement across PHYSICALLY INDEPENDENT sensors raises confidence. The combined picture
+    # (not the raw numbers) is what drives the advisory and the verification gate.
+    fusion_result = {}
+    try:
+        def _st(fn, key):
+            v = indices_map.get(key)
+            return fn(v) if v is not None else None
+        signals = {
+            "ndvi_status": _st(v3_indices.classify_ndvi, "ndvi"),
+            "ndre_status": _st(v3_indices.classify_ndre, "ndre"),
+            "ndmi_status": _st(v3_indices.classify_ndmi, "ndmi"),
+            "ccci_status": _st(v3_indices.classify_ccci, "ccci"),
+            "dswi_status": _st(v3_indices.classify_dswi, "dswi"),
+            "psri_status": _st(v3_indices.classify_psri, "psri"),
+            "ari_status": _st(v3_indices.classify_ari, "ari"),
+            "otci_status": _st(v3_indices.classify_otci, "otci"),
+            "gndvi": indices_map.get("gndvi"),
+            "mtci": indices_map.get("mtci"),
+            "esi_status": (v3_agronomy.classify_esi(agronomy["esi"])
+                           if agronomy.get("esi") is not None else None),
+            "cwsi_status": (v3_agronomy.classify_cwsi(agronomy["cwsi"])
+                            if agronomy.get("cwsi") is not None else None),
+            "sar_moisture": (satellite_extras.get("sar") or {}).get("moisture_class"),
+            "smap_rootzone_class": (satellite_extras.get("smap") or {}).get("rootzone_class"),
+            "power_gwetroot": agroclimate.get("rootzone_wetness"),
+            "model_root_m3m3": (agroclimate.get("soil_moisture_root_m3m3")
+                                or earthdata.get("rootzone_moisture_m3m3")),
+            "lst_heat_stress": (satellite_extras.get("lst") or {}).get("heat_stress"),
+            "thermal_anomaly": agronomy.get("thermal_anomaly_c"),
+            "vpd": agroclimate.get("vpd_kpa"),
+            "heat_dd": agronomy.get("heat_stress_dd"),
+            "humidity": agroclimate.get("relative_humidity"),
+            "trajectory_direction": (predictions.get("trajectory") or {}).get("direction"),
+            "gdd_stage": (growth_stage or {}).get("stage"),
+        }
+        fusion_result = v3_fusion.synthesize(signals)
+        if fusion_result.get("findings"):
+            log.info(f"Fusion: {fusion_result['fused_count']} cross-checked diagnoses — "
+                     f"{[(f['diagnosis'], f['confidence']) for f in fusion_result['findings']]}")
+    except Exception as e:
+        log.warning(f"v3 fusion failed: {e}")
+
     try:
         if best_mandi and best_mandi.get("distance_km"):
             best_mandi["fare_breakdown"] = v3_logistics.estimate_transport_fare(
@@ -2981,6 +3054,7 @@ async def _run_advisory(req: AdvisoryRequest):
         indices_map=indices_map,
         predictions=predictions,
         agronomy=agronomy,
+        fusion=fusion_result,
     )
 
     response_data = {
@@ -3004,6 +3078,7 @@ async def _run_advisory(req: AdvisoryRequest):
         "parameters_mapped": parameters_count,
         "agroclimate": agroclimate if agroclimate else {},
         "agronomy": agronomy if agronomy else {},
+        "fusion": fusion_result if fusion_result else {},
         "predictions": predictions if predictions else {},
         "advisory": advisory_text,
         "sources": {

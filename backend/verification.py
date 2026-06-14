@@ -153,6 +153,25 @@ def run_deterministic_checks(advisory_text: str, payload: dict) -> list[dict]:
             "detail": "A pest/disease conflict was flagged; advisory should mention KVK.",
         })
 
+    # 8. Combined multi-sensor diagnosis coverage — the advisory must not ignore a
+    # high-confidence fused finding (the whole point of fusing the parameters).
+    for f in (payload.get("fusion", {}) or {}).get("findings", []):
+        diag, verdict, conf = f.get("diagnosis"), f.get("verdict"), f.get("confidence")
+        if diag == "water" and verdict == "water_stress" and conf == "HIGH":
+            findings.append({
+                "check": "fused_water_addressed", "severity": "MEDIUM",
+                "passed": bool(re.search(r"\b(irrigat|water|paani|moist)\b", text, re.I)),
+                "detail": "Independent sensors agree on water stress, but the advisory does not "
+                          "mention watering.",
+            })
+        if diag == "biotic_stress" and verdict == "possible_disease":
+            findings.append({
+                "check": "fused_disease_to_kvk", "severity": "MEDIUM",
+                "passed": bool(re.search(r"kvk|krishi", text, re.I)),
+                "detail": "Combined signals point to possible disease, but the advisory does not "
+                          "refer to KVK.",
+            })
+
     return findings
 
 

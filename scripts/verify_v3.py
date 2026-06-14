@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend import indices, prediction, logistics, verification  # noqa: E402
+from backend import indices, prediction, logistics, verification, fusion  # noqa: E402
 from backend.agroclimate import fetch_agroclimate  # noqa: E402
 
 PASS, FAIL = "PASS", "FAIL"
@@ -283,12 +283,51 @@ def test_expansion():
     check("full request maps 44 parameters", n == 44, f"{n}")
 
 
+def test_fusion():
+    """Multi-sensor fusion: independence-weighted agreement, conflict, hidden deficiency,
+    disease, and verification's use of the combined diagnosis."""
+    print("\n== fusion: combine 44 params into cross-checked diagnoses ==")
+    # 6 physically independent water sensors agree dry → HIGH.
+    s = {"ndmi_status": "water_stress", "sar_moisture": "dry", "smap_rootzone_class": "low",
+         "power_gwetroot": 0.2, "cwsi_status": "high_stress", "esi_status": "water_stress"}
+    w = fusion.fuse_water(s)
+    check("6 independent sensors agree -> HIGH water stress",
+          w["verdict"] == "water_stress" and w["confidence"] == "HIGH"
+          and w["independent_bases_agreeing"] == 6, str(w["independent_bases_agreeing"]))
+    # Correlated red-edge indices must NOT inflate independence → one basis; Sentinel-3 = 2nd.
+    sn = {"ndvi_status": "healthy", "ndre_status": "deficient", "ccci_status": "low",
+          "gndvi": 0.3, "mtci": 1.0, "otci_status": "low"}
+    n = fusion.fuse_nitrogen(sn)
+    check("hidden N deficiency (green canopy, low N)", n["verdict"] == "hidden_deficiency")
+    check("correlated S2 indices count as ONE basis (+S3 = 2)",
+          n["independent_bases_checked"] == 2, str(n["independent_bases_checked"]))
+    # Plant-vs-soil even split -> flagged conflict, not a false verdict.
+    sc = {"ndmi_status": "water_stress", "cwsi_status": "high_stress",
+          "sar_moisture": "wet", "smap_rootzone_class": "adequate"}
+    check("plant-vs-soil split -> flagged conflict", fusion.fuse_water(sc)["conflict"])
+    # Disease: vigour down while water is fine → not thirst.
+    sd = {"dswi_status": "stress", "trajectory_direction": "declining", "humidity": 85}
+    check("disease fused (vigour down + water ok)",
+          fusion.fuse_disease(sd, "adequate")["verdict"] == "possible_disease")
+    syn = fusion.synthesize({**s, **sn})
+    check("synthesize returns combined picture", bool(syn["picture"]) and syn["fused_count"] >= 2,
+          f"{syn['fused_count']} findings")
+    # Verification leverages fusion: HIGH water stress but advisory silent on water → flag.
+    payload = {"best_mandi": {"market": "X", "modal_price": 1000}, "mandis": [],
+               "fusion": {"findings": [{"diagnosis": "water", "verdict": "water_stress",
+                                        "confidence": "HIGH"}]}}
+    fchecks = verification.run_deterministic_checks("Sell at X for Rs 1000. Crop looks fine.", payload)
+    fw = next((c for c in fchecks if c["check"] == "fused_water_addressed"), None)
+    check("verification flags ignored fused water stress", fw is not None and not fw["passed"])
+
+
 def main():
     test_indices()
     test_prediction()
     test_logistics()
     test_verification()
     test_expansion()
+    test_fusion()
     try:
         asyncio.run(test_agroclimate_live())
     except Exception as e:
