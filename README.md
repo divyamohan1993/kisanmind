@@ -203,8 +203,22 @@ NDVI alone saturates, ignores water and nitrogen, and lies during ripening. Kisa
 - Fixes the legacy EVI scaling bug; every value is range-checked before use.
 - `GET /api/parameters` lists all 44 parameters by family with their source, at runtime.
 
+### These don't stay separate numbers — they're fused
+A synthesis layer combines the 44 parameters by *physically independent* measurement basis, so
+agreement across independent sensors is what raises confidence:
+- When radar, microwave (SMAP), a land-surface model, canopy temperature **and**
+  evapotranspiration all read "dry," that is a **HIGH-confidence** call to irrigate.
+- When they disagree — leaf stress but wet soil — the system **flags the conflict** ("check by
+  hand") instead of guessing.
+- Seven correlated red-edge chlorophyll indices count as **one** basis, so confidence is never
+  inflated by redundant sensors. A green canopy hiding low nitrogen is caught as a **hidden
+  deficiency** NDVI alone would miss.
+
+The advisory **leads with this combined diagnosis**, and the verification gate flags any advisory
+that ignores a high-confidence fused finding.
+
 > **Coverage, honestly:** the agro-climate signals (ET, soil moisture, solar, VPD) and the
-> base satellite layer reach every farmer **live, today**. The full 14-index optical set is
+> base satellite layer reach every farmer **live, today**. The full 24-index optical set is
 > computed on the live Earth-Engine path and via Copernicus immediately; for pre-cached
 > locations the 24 Sentinel-2 indices land after a one-time `precompute_satellite.py` rerun.
 > The system reports `parameters_mapped` on every advisory so coverage is never overstated.

@@ -21,6 +21,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `parameters_mapped` now reports up to 44; `GET /api/parameters` and the cache/precompute
   storage updated accordingly. Advisory + voice weave the new water-stress, disease, frost
   and spray-timing signals into plain language.
+- **Multi-sensor fusion** (`backend/fusion.py`): combines the 44 parameters into cross-checked
+  diagnoses (water / nitrogen / disease / heat / harvest) weighted by *physically independent*
+  measurement basis — agreement across independent sensors raises confidence, correlated
+  indices count once, and disagreement is flagged as a conflict rather than guessed. The
+  advisory leads with this combined diagnosis; the verification gate flags advisories that
+  ignore a high-confidence fused finding. Response adds a `fusion` block.
 
 ## [3.0.0] - 2026-06-14
 
