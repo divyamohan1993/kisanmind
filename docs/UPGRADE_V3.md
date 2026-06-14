@@ -93,13 +93,13 @@ through translation + TTS unchanged.
 
 ## Status — built overnight, autonomous
 - **Branch:** `feat/v3-multiparam-sensing` — **committed, NOT pushed, NOT deployed.** `main` is untouched; the live app at kisanmind.dmj.one still runs v2.
-- **Verified:** `python scripts/verify_v3.py` → **39/39** checks, including LIVE NASA POWER + Open-Meteo and a full enrichment+verification simulation. All backend modules `py_compile` clean. The EVI scaling bug is fixed and the legacy bad cache value is null-guarded.
+- **Verified:** `python scripts/verify_v3.py` → **55/55** checks, including LIVE NASA POWER + Open-Meteo, the full enrichment+verification simulation, the 44-parameter expansion (new S2 indices + agronomy fusion math: photoperiod/ESI/CWSI/chill/frost), and graceful no-key paths for every credential-gated cluster. All backend modules `py_compile` clean. The EVI scaling bug is fixed and the legacy bad cache value is null-guarded.
 - **NOT verified (no way to, tonight):** `main.py` was never run as a server — there is no `.env`, and `fastapi`/`earthengine`/`google-cloud`/`genai` are not installed locally. Wiring was checked by compile + code inspection + a simulation that mirrors `_run_advisory`. First real server run is step 3 below.
 
 ## What reaches farmers, precisely (no overclaim)
-- **Live today on merge:** agro-climate parameters (ET, root/surface soil moisture, solar, VPD, soil temp — NASA POWER + Open-Meteo, no key) + base satellite (NDVI, SAR moisture, MODIS LST, SMAP) + **FAO-56 irrigation forecast** + diesel transport fare + agentic verification. That's ~9–11 mapped parameters per request, fetched fresh.
-- **After the precompute rerun (step 4):** the full 14-index Sentinel-2 set for cached locations → 15–20+ parameters. Until then those extra optical indices appear only on live-EE cache-miss requests and via Copernicus.
-- Every advisory returns `parameters_mapped` so coverage is honest at runtime.
+- **Live today on merge (no key, no precompute):** ~**20 parameters** per request — base satellite (NDVI, SAR moisture, MODIS LST, SMAP) + agro-climate (ET, soil moisture, solar, VPD, soil temp, humidity, wind — NASA POWER + Open-Meteo) + the **12 derived agronomy params** (CWSI, ESI, photoperiod, chill, heat-stress DD, frost risk, aridity, thermal anomaly, surface moisture), which are *computed* from that live data. Plus FAO-56 irrigation forecast, diesel fare, agentic verification.
+- **After the precompute rerun (step 4) — or via Copernicus / live-EE cache-miss:** the 24 Sentinel-2 optical indices land for cached locations → up to the full **44**.
+- Every advisory returns `parameters_mapped` so coverage is honest at runtime; `GET /api/parameters` lists all 44 by family + which providers are configured.
 
 ## Deploy sequence (when you're awake)
 1. **Review the diff:** `git log main..feat/v3-multiparam-sensing`, skim `backend/main.py` changes.
@@ -113,10 +113,10 @@ through translation + TTS unchanged.
 - **Copernicus Sentinel-2 + Sentinel-3 (one key):** set `CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET` (free at dataspace.copernicus.eu). Unlocks direct Sentinel-2 indices AND Sentinel-3 OLCI (OTCI chlorophyll + daily NDVI cloud gap-fill) — both straight from ESA, no GEE.
 - **NASA Earthdata (independent soil/ET):** set `EARTHDATA_TOKEN` (free at urs.earthdata.nasa.gov). Adds GLDAS root-zone moisture, soil profile, ET and surface temp — a third independent water source that strengthens the verification gate.
 - **Diesel price:** `DIESEL_PRICE_PER_L` tunes the transport fare model (defaults ~₹90/l).
-- **Runtime parameter list:** `GET /api/parameters` returns all 22 parameters grouped by family with each source + which providers are configured. Verifiable smoke test after deploy.
+- **Runtime parameter list:** `GET /api/parameters` returns all 44 parameters grouped by family with each source + which providers are configured. Verifiable smoke test after deploy.
 
 > The two ESA/NASA clusters above are **credential-gated and untested until the keys exist** (same status as Copernicus). Each returns `{"available": false}` with zero network calls when its key is unset, so they cannot affect the app until enabled. Their no-key paths and parsers are unit-tested in `scripts/verify_v3.py`; their live paths run on first request after you add the key.
 
 ## Files added / changed
-- New: `backend/indices.py`, `agroclimate.py`, `prediction.py`, `logistics.py`, `verification.py`, `copernicus.py` (Sentinel-2 + Sentinel-3), `earthdata.py` (NASA GLDAS); `scripts/verify_v3.py`; `docs/UPGRADE_V3.md`. New endpoint `GET /api/parameters`.
+- New: `backend/indices.py`, `agroclimate.py`, `agronomy.py`, `prediction.py`, `logistics.py`, `verification.py`, `copernicus.py` (Sentinel-2 + Sentinel-3), `earthdata.py` (NASA GLDAS); `scripts/verify_v3.py`; `docs/UPGRADE_V3.md`. New endpoint `GET /api/parameters`.
 - Changed: `backend/main.py` (enrichment + prompt + verification gate + voice), `satellite_cache.py` (EVI guard + index passthrough), `scripts/precompute_satellite.py` (EVI fix + 14 indices), `tests/test_e2e.py`, `frontend/app/page.tsx` (copy), `README.md`, `CHANGELOG.md`, `.env.example`.

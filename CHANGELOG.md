@@ -4,6 +4,24 @@ All notable changes to KisanMind are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.1.0] - 2026-06-14
+
+### Added
+- **Doubled to 44 growth parameters** for denser fact mapping and prediction:
+  - 10 new Sentinel-2 indices (`backend/indices.py`): CCCI (nitrogen decoupled from biomass),
+    MTCI + S2REP (red-edge chlorophyll/position), ARI (anthocyanin stress), **DSWI**
+    (disease-water stress → KVK trigger), ARVI + VARI (haze/RGB-robust greenness), WDRVI
+    (late-season biomass), BSI (germination gaps), NDTI (residue/tillage).
+  - 12 derived agronomy parameters (`backend/agronomy.py`, pure): **CWSI** + **ESI** (crop
+    water stress from LST/air-temp/VPD and actual÷reference ET), field thermal anomaly,
+    relative humidity (fungal-disease pressure), wind (spray/lodging), soil temperature,
+    surface soil moisture, aridity index, photoperiod (flowering), chill hours (temperate
+    fruit), heat-stress degree days, frost risk — each with farmer-language interpretation.
+- NASA POWER fetch extended with relative humidity (RH2M) and wind (WS2M).
+- `parameters_mapped` now reports up to 44; `GET /api/parameters` and the cache/precompute
+  storage updated accordingly. Advisory + voice weave the new water-stress, disease, frost
+  and spray-timing signals into plain language.
+
 ## [3.0.0] - 2026-06-14
 
 ### Added

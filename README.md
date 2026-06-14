@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white" />
   <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat-square&logo=fastapi&logoColor=white" />
   <img src="https://img.shields.io/badge/Gemini-3_Flash-4285F4?style=flat-square&logo=google&logoColor=white" />
-  <img src="https://img.shields.io/badge/Growth_Params-20+-FF6F00?style=flat-square&logo=satellite&logoColor=white" />
+  <img src="https://img.shields.io/badge/Growth_Params-44-FF6F00?style=flat-square&logo=satellite&logoColor=white" />
   <img src="https://img.shields.io/badge/Open_Data-8_Sources-009688?style=flat-square" />
   <img src="https://img.shields.io/badge/Languages-22-138808?style=flat-square" />
   <img src="https://img.shields.io/badge/WCAG-2.2_AAA-1a365d?style=flat-square" />
@@ -20,7 +20,7 @@
 <h3 align="center">Satellite-to-Voice Agricultural Intelligence for 150M Indian Farmers</h3>
 
 <p align="center">
-  <b>22 Growth Parameters</b> &middot; <b>8 Satellite/Open-Data Sources (beyond Earth Engine)</b> &middot; <b>Predicts Irrigation & Harvest</b> &middot; <b>Agentic Verification</b> &middot; <b>Voice in 22 Languages</b>
+  <b>44 Growth Parameters</b> &middot; <b>8 Satellite/Open-Data Sources (beyond Earth Engine)</b> &middot; <b>Predicts Irrigation & Harvest</b> &middot; <b>Agentic Verification</b> &middot; <b>Voice in 22 Languages</b>
 </p>
 
 <p align="center">
@@ -188,25 +188,26 @@ sequenceDiagram
 - **Gemini-powered call summary** — 3-5 key bullet points generated after call ends
 - Multi-turn conversation with follow-up questions
 
-### Real Multi-Parameter Sensing (the 80/20 set)
+### Real Multi-Parameter Sensing (44 parameters)
 NDVI alone saturates, ignores water and nitrogen, and lies during ripening. KisanMind maps
-**20+ parameters** that explain most of crop growth, then translates them to plain language:
-- **Greenness / biomass** — NDVI, EVI, SAVI, MSAVI2, LAI, FAPAR
-- **Chlorophyll / nitrogen** — NDRE, GNDVI, CIred-edge *(catches deficiency green canopy hides)*
-- **Water** — NDMI/NMDI (canopy), Sentinel-1 SAR + SMAP + NASA POWER (soil), ET & VPD (demand)
-- **Phenology / stress** — PSRI (ripening), MODIS LST (heat), GDD (thermal time), NBR
+**44 parameters** that together explain crop growth, then translates them to plain language:
+- **Greenness / biomass** — NDVI, EVI, SAVI, MSAVI2, ARVI, VARI, WDRVI, LAI, FAPAR
+- **Chlorophyll / nitrogen** — NDRE, GNDVI, CIred-edge, CCCI, MTCI, S2REP, OTCI *(7 ways to catch deficiency a green canopy hides)*
+- **Water / stress** — NDMI, NMDI, DSWI *(disease)*; SAR + SMAP + GLDAS *(soil)*; ET, ESI, CWSI *(crop water stress)*; VPD, surface moisture, aridity
+- **Phenology / damage** — PSRI, ARI, GDD, photoperiod, chill hours, heat-stress degree days, frost risk, NBR
+- **Soil / climate** — BSI *(germination gaps)*, NDTI *(residue)*, LST + field heat anomaly, solar, humidity *(disease)*, wind *(spray)*, soil temperature
 - **8 sources, beyond Earth Engine** — Sentinel-2/-1, MODIS, SMAP (via GEE); **NASA POWER**
   & **Open-Meteo** (live, no key); **Copernicus Sentinel-2 + Sentinel-3 OLCI** (direct from
   ESA); **NASA Earthdata GLDAS** (independent soil/ET). If one source is down, the rest carry
   the advisory; independent sources let the verifier trust agreeing signals.
 - Fixes the legacy EVI scaling bug; every value is range-checked before use.
-- `GET /api/parameters` lists all 22 parameters by family with their source, at runtime.
+- `GET /api/parameters` lists all 44 parameters by family with their source, at runtime.
 
 > **Coverage, honestly:** the agro-climate signals (ET, soil moisture, solar, VPD) and the
 > base satellite layer reach every farmer **live, today**. The full 14-index optical set is
 > computed on the live Earth-Engine path and via Copernicus immediately; for pre-cached
-> locations it lands after a one-time `precompute_satellite.py` rerun. The system reports
-> `parameters_mapped` on every advisory so coverage is never overstated.
+> locations the 24 Sentinel-2 indices land after a one-time `precompute_satellite.py` rerun.
+> The system reports `parameters_mapped` on every advisory so coverage is never overstated.
 
 ### Prediction & Agentic Verification
 - **Days until irrigation** — FAO-56 soil-water balance from real root-zone moisture + ET +
@@ -332,7 +333,7 @@ Languages without native TTS are auto-translated to Hindi for speech synthesis.
 | `POST` | `/api/voice/process` | Twilio webhook — speech processing + TwiML response |
 | `WS` | `/ws/chat` | WebSocket for Gemini Live voice streaming |
 | `GET` | `/api/health` | Service health + API availability check |
-| `GET` | `/api/parameters` | All 22 growth parameters by family + source + provider status |
+| `GET` | `/api/parameters` | All 44 growth parameters by family + source + provider status |
 | `GET` | `/api/beep` | Base64 WAV alert tone for advisory notifications |
 
 ---
@@ -345,7 +346,8 @@ Languages without native TTS are auto-translated to Hindi for speech synthesis.
 | Soil Moisture (Radar) | Sentinel-1 SAR C-band (VV/VH) | 10m | Pre-computed grid (O(1)) | Every 6 days |
 | Land Surface Temperature | MODIS Terra MOD11A1 | 1km | Pre-computed grid (O(1)) | Daily |
 | Root-Zone Moisture (0–100cm) | NASA SMAP L4 | 9km | Pre-computed grid (O(1)) | Every 2-3 days |
-| 14 Sentinel-2 growth indices | Sentinel-2 SR (shared index module) | 10-20m | Grid / live EE | Per cache build |
+| 24 Sentinel-2 growth indices | Sentinel-2 SR (shared index module) | 10-20m | Grid / live EE | Per cache build |
+| Derived agronomy (CWSI, ESI, photoperiod, chill, frost, aridity) | Fusion of LST + ET + weather + lat/date | Point | Computed | Per request |
 | ET, soil wetness, solar | **NASA POWER** (no key, beyond GEE) | ~0.5° | Live | Per request |
 | Layered soil moisture, ET0, VPD | **Open-Meteo** (no key) | Hyperlocal | Live | Per request |
 | Direct Sentinel-2 indices | **Copernicus Data Space** (optional, no GEE) | 10m | Live | Per request |
